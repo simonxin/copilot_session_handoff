@@ -1,0 +1,14 @@
+{
+  "export": {
+    "platform": "github-copilot-cli",
+    "workflowId": "copilot-cli-session-handoff-test",
+    "workflowRevision": 1,
+    "fallbackRunId": "session-47-test",
+    "nodeId": "session-summary",
+    "resumeObjective": "Continue the work summarized by the previous session checkpoint.",
+    "recommendedPrompt": "First verify the package and its evidence, then continue from the documented open questions and next steps without assuming artifacts were imported."
+  },
+  "import": {
+    "platform": "copilot-cli"
+  }
+}

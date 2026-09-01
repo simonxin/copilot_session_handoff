@@ -1,0 +1,29 @@
+{
+  "name": "copilot-session-handoff-mcp",
+  "version": "0.1.0",
+  "description": "Standalone MCP server for portable Agency Flow session handoffs.",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "copilot-session-handoff-mcp": "./dist/server.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "dev": "tsx src/server.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && python -m pytest"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.2",
+    "tsx": "^4.23.1",
+    "typescript": "~6.0.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
