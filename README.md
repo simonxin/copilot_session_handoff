@@ -71,6 +71,11 @@ location:
 %USERPROFILE%\.copilot\session-handoffs
 ```
 
+The plugin uses the built-in workflow defaults. `HANDOFF_DEFAULTS_FILE` remains
+available for manual MCP configurations, but is intentionally omitted from the
+plugin manifest because Copilot CLI does not expand `${PLUGIN_ROOT}` inside MCP
+environment-variable values.
+
 Verify the installation:
 
 ```powershell

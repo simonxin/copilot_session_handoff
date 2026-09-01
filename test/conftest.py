@@ -36,6 +36,7 @@ class McpProcess:
         self,
         store: Path,
         environment_overrides: dict[str, str] | None = None,
+        server: Path = SERVER,
     ) -> None:
         node = shutil.which("node")
         if node is None:
@@ -51,7 +52,7 @@ class McpProcess:
         )
         environment.update(environment_overrides or {})
         self._process = subprocess.Popen(
-            [node, str(SERVER)],
+            [node, str(server)],
             cwd=ROOT,
             env=environment,
             stdin=subprocess.PIPE,

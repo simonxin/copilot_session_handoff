@@ -84,6 +84,29 @@ def test_tool_profiles_expose_only_host_specific_tools(tmp_path: Path) -> None:
         studio.close()
 
 
+def test_plugin_manifest_launches_bundled_mcp(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    manifest = json.loads((root / ".mcp.json").read_text(encoding="utf-8"))
+    configuration = manifest["mcpServers"]["copilot-session-handoff"]
+    assert "HANDOFF_DEFAULTS_FILE" not in configuration["env"]
+    server = Path(
+        configuration["args"][0].replace("${PLUGIN_ROOT}", str(root))
+    )
+
+    plugin = McpProcess(
+        tmp_path / "plugin-store",
+        configuration["env"],
+        server=server,
+    )
+    try:
+        assert plugin.list_tools() == {
+            "create_handoff_package",
+            "continue_from_handoff",
+        }
+    finally:
+        plugin.close()
+
+
 def test_creates_and_verifies_studio_compatible_package(mcp: McpProcess) -> None:
     package = create_handoff(mcp)["package"]
 

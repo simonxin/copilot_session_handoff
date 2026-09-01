@@ -9,8 +9,7 @@
       "env": {
         "HANDOFF_ACTOR_ID": "person:local-copilot-cli-user",
         "HANDOFF_ACTOR_KIND": "person",
-        "HANDOFF_TOOL_PROFILE": "cli",
-        "HANDOFF_DEFAULTS_FILE": "${PLUGIN_ROOT}/handoff-defaults.json"
+        "HANDOFF_TOOL_PROFILE": "cli"
       },
       "tools": [
         "*"
