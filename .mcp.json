@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "copilot-session-handoff": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${PLUGIN_ROOT}/plugin-dist/server.mjs"
+      ],
+      "env": {
+        "HANDOFF_ACTOR_ID": "person:local-copilot-cli-user",
+        "HANDOFF_ACTOR_KIND": "person",
+        "HANDOFF_TOOL_PROFILE": "cli",
+        "HANDOFF_DEFAULTS_FILE": "${PLUGIN_ROOT}/handoff-defaults.json"
+      },
+      "tools": [
+        "*"
+      ]
+    }
+  }
+}

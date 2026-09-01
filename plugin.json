@@ -1,0 +1,20 @@
+{
+  "name": "copilot-session-handoff",
+  "description": "Create portable, verified Copilot session handoff packages and continue work from them.",
+  "version": "0.1.0",
+  "author": {
+    "name": "simonxin",
+    "url": "https://github.com/simonxin"
+  },
+  "homepage": "https://github.com/simonxin/copilot_session_handoff",
+  "repository": "https://github.com/simonxin/copilot_session_handoff",
+  "keywords": [
+    "copilot",
+    "session",
+    "handoff",
+    "backup",
+    "mcp"
+  ],
+  "category": "developer-tools",
+  "mcpServers": ".mcp.json"
+}

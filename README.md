@@ -43,9 +43,53 @@ npm test
 The MCP implementation remains TypeScript. Its Python tests launch the compiled
 Node.js server over stdio and exercise the public MCP contract end to end.
 
+## Install as a Copilot CLI plugin
+
+Register the GitHub repository as a marketplace and install the plugin:
+
+```powershell
+copilot plugin marketplace add simonxin/copilot_session_handoff
+copilot plugin install copilot-session-handoff@simonxin-plugins
+```
+
+If GitHub access from Copilot CLI is unavailable, clone through any approved
+network path, register the local checkout as the marketplace, and install from
+it:
+
+```powershell
+git clone https://github.com/simonxin/copilot_session_handoff.git C:\tools\copilot-session-handoff
+copilot plugin marketplace add C:\tools\copilot-session-handoff
+copilot plugin install copilot-session-handoff@simonxin-plugins
+```
+
+The repository includes a bundled `plugin-dist/server.mjs`, so the target
+machine does not need to run `npm install` or compile TypeScript. Node.js 20 or
+newer is still required. The plugin stores packages in the MCP's normal default
+location:
+
+```text
+%USERPROFILE%\.copilot\session-handoffs
+```
+
+Verify the installation:
+
+```powershell
+copilot plugin list
+copilot mcp list
+```
+
+When updating a direct or local installation, reinstall the plugin so Copilot
+CLI refreshes its cached copy:
+
+```powershell
+copilot plugin marketplace update simonxin-plugins
+copilot plugin install copilot-session-handoff@simonxin-plugins
+```
+
 ## Copilot CLI MCP configuration
 
-Configure a separate store and actor for each OS/user credential:
+Manual MCP configuration remains available when plugin installation is not
+desired. Configure a separate store and actor for each OS/user credential:
 
 ```json
 {

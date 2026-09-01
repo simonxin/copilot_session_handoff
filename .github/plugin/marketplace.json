@@ -1,0 +1,29 @@
+{
+  "name": "simonxin-plugins",
+  "owner": {
+    "name": "simonxin"
+  },
+  "metadata": {
+    "description": "Copilot CLI plugins maintained by simonxin.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "copilot-session-handoff",
+      "description": "Create portable, verified Copilot session handoff packages and continue work from them.",
+      "version": "0.1.0",
+      "source": ".",
+      "author": {
+        "name": "simonxin"
+      },
+      "category": "developer-tools",
+      "tags": [
+        "copilot",
+        "session",
+        "handoff",
+        "backup",
+        "mcp"
+      ]
+    }
+  ]
+}
