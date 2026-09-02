@@ -75,7 +75,6 @@ def test_tool_profiles_expose_only_host_specific_tools(tmp_path: Path) -> None:
     try:
         assert cli.list_tools() == {
             "create_handoff_bundle",
-            "create_handoff_package",
             "continue_from_handoff",
         }
         assert studio.list_tools() == {
@@ -105,7 +104,6 @@ def test_plugin_manifest_launches_bundled_mcp(tmp_path: Path) -> None:
     try:
         assert plugin.list_tools() == {
             "create_handoff_bundle",
-            "create_handoff_package",
             "continue_from_handoff",
         }
     finally:
@@ -301,7 +299,7 @@ def test_milestone_checkpoints_link_findings_to_evidence(
 ) -> None:
     producer = McpProcess(
         tmp_path / "milestone-producer",
-        {"HANDOFF_TOOL_PROFILE": "cli"},
+        {"HANDOFF_TOOL_PROFILE": "full"},
     )
     try:
         exported = producer.call_tool(
@@ -425,7 +423,7 @@ def test_milestone_checkpoints_link_findings_to_evidence(
 def test_rejects_invalid_milestone_evidence_links(tmp_path: Path) -> None:
     producer = McpProcess(
         tmp_path / "invalid-milestone-producer",
-        {"HANDOFF_TOOL_PROFILE": "cli"},
+        {"HANDOFF_TOOL_PROFILE": "full"},
     )
     try:
         with pytest.raises(
@@ -620,9 +618,179 @@ def test_creates_and_continues_portable_handoff_bundle(
     ]
 
 
+def test_default_bundle_auto_exports_safe_session_and_artifact_files(
+    tmp_path: Path,
+) -> None:
+    session_id = "session-auto-bundle"
+    session_directory = tmp_path / "session-state" / session_id
+    session_directory.mkdir(parents=True)
+    events = [
+        {
+            "type": "session.start",
+            "id": "event-start",
+            "timestamp": "2026-09-02T01:00:00.000Z",
+            "data": {
+                "sessionId": session_id,
+                "producer": "copilot-agent",
+                "selectedModel": "gpt-test",
+                "context": {"cwd": r"C:\case"},
+            },
+        },
+        {
+            "type": "system.message",
+            "id": "event-system",
+            "timestamp": "2026-09-02T01:00:01.000Z",
+            "data": {"content": "private system instructions"},
+        },
+        {
+            "type": "model.response",
+            "id": "event-model",
+            "timestamp": "2026-09-02T01:00:02.000Z",
+            "data": {"reasoning": "private model data"},
+        },
+        {
+            "type": "hook.start",
+            "id": "event-hook",
+            "timestamp": "2026-09-02T01:00:03.000Z",
+            "data": {"command": "private hook"},
+        },
+        {
+            "type": "user.message",
+            "id": "event-user",
+            "timestamp": "2026-09-02T01:00:04.000Z",
+            "data": {
+                "content": "Investigate the authentication failure.",
+                "transformedContent": "must not be exported",
+                "turnId": "turn-1",
+            },
+        },
+        {
+            "type": "assistant.message",
+            "id": "event-assistant",
+            "timestamp": "2026-09-02T01:00:05.000Z",
+            "data": {
+                "messageId": "message-1",
+                "content": "The HAR confirms the failure.",
+                "turnId": "turn-1",
+                "reasoningOpaque": "must not be exported",
+                "encryptedContent": "must not be exported",
+            },
+        },
+        {
+            "type": "tool.execution_complete",
+            "id": "event-tool",
+            "timestamp": "2026-09-02T01:00:06.000Z",
+            "data": {
+                "toolCallId": "tool-1",
+                "success": True,
+                "result": {
+                    "status": "failed",
+                    "token": "must be redacted",
+                },
+                "toolTelemetry": {"duration": 123},
+            },
+        },
+    ]
+    (session_directory / "events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events),
+        encoding="utf-8",
+    )
+    evidence_file = tmp_path / "authentication.har"
+    evidence_file.write_text(
+        '{"log":{"entries":[{"response":{"status":401}}]}}',
+        encoding="utf-8",
+    )
+
+    producer = McpProcess(
+        tmp_path / "auto-bundle-producer",
+        {
+            "HANDOFF_TOOL_PROFILE": "cli",
+            "HANDOFF_SESSION_STATE_DIR": str(tmp_path / "session-state"),
+        },
+    )
+    try:
+        bundled = producer.call_tool(
+            "create_handoff_bundle",
+            {
+                "runId": session_id,
+                "analysisRecord": {
+                    "summary": "Investigated authentication failure.",
+                    "observations": ["Reviewed the HAR."],
+                    "nextSteps": ["Revalidate after import."],
+                },
+                "artifacts": [
+                    {
+                        "id": "authentication-har",
+                        "path": str(evidence_file),
+                        "description": "Original authentication HAR",
+                        "mediaType": "application/json",
+                    }
+                ],
+                "includeFileContents": True,
+                "sensitivityReviewConfirmed": True,
+                "destinationDirectory": str(tmp_path / "auto-bundles"),
+            },
+        )
+    finally:
+        producer.close()
+
+    assert bundled["exportFormat"] == "bundle"
+    assert bundled["safeSessionExport"]["retainedEventCount"] == 4
+    assert bundled["safeSessionExport"]["excludedEventCount"] == 3
+    assert bundled["safeSessionExport"]["excludedEventTypes"] == {
+        "system.message": 1,
+        "model.response": 1,
+        "hook.start": 1,
+    }
+    assert [item["role"] for item in bundled["includedFiles"]] == [
+        "session-history",
+        "evidence",
+    ]
+
+    with zipfile.ZipFile(bundled["bundlePath"]) as archive:
+        names = archive.namelist()
+        session_name = next(
+            name for name in names if name.startswith("session/")
+        )
+        evidence_name = next(
+            name for name in names if name.startswith("evidence/")
+        )
+        safe_session = json.loads(archive.read(session_name))
+        serialized = json.dumps(safe_session["events"])
+        assert "private system instructions" not in serialized
+        assert "private model data" not in serialized
+        assert "private hook" not in serialized
+        assert "reasoningOpaque" not in serialized
+        assert "encryptedContent" not in serialized
+        assert "toolTelemetry" not in serialized
+        assert "transformedContent" not in serialized
+        tool_event = next(
+            event
+            for event in safe_session["events"]
+            if event["type"] == "tool.execution_complete"
+        )
+        assert "token" not in tool_event["data"]["result"]
+        assert archive.read(evidence_name) == evidence_file.read_bytes()
+        package = json.loads(
+            archive.read("handoff.agent-handoff.json")
+        )
+        evidence_artifact = next(
+            item
+            for item in package["content"]["artifacts"]
+            if item["id"] == "authentication-har"
+        )
+        assert evidence_artifact["uri"].startswith("bundle://evidence/")
+        assert str(evidence_file) not in json.dumps(package)
+
+
 def test_rejects_tampered_handoff_bundle(tmp_path: Path) -> None:
     evidence_file = tmp_path / "evidence.log"
     evidence_file.write_text("original evidence", encoding="utf-8")
+    session_history = tmp_path / "safe-session.json"
+    session_history.write_text(
+        '{"schemaVersion":"1.0","events":[]}',
+        encoding="utf-8",
+    )
     producer = McpProcess(
         tmp_path / "tamper-producer",
         {"HANDOFF_TOOL_PROFILE": "cli"},
@@ -632,6 +800,10 @@ def test_rejects_tampered_handoff_bundle(tmp_path: Path) -> None:
             "create_handoff_bundle",
             {
                 "analysisRecord": {"summary": "Bundle tamper test."},
+                "sessionHistoryFile": {
+                    "id": "safe-session-history",
+                    "filePath": str(session_history),
+                },
                 "evidenceFiles": [
                     {
                         "id": "evidence-log",

@@ -2984,7 +2984,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve5.call(this, root, ref);
+      let _sch = resolve6.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a4 = root.localRefs) === null || _a4 === void 0 ? void 0 : _a4[ref];
         const { schemaId } = this.opts;
@@ -3011,7 +3011,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve5(root, ref) {
+    function resolve6(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3836,7 +3836,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve5(baseURI, relativeURI, options) {
+    function resolve6(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -4198,7 +4198,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve5,
+      resolve: resolve6,
       resolveComponent,
       equal,
       serialize,
@@ -7189,7 +7189,7 @@ var require_dist = __commonJS({
 
 // src/server.ts
 import { homedir } from "node:os";
-import { resolve as resolve4 } from "node:path";
+import { resolve as resolve5 } from "node:path";
 
 // node_modules/zod/v3/helpers/util.js
 var util;
@@ -29149,7 +29149,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve5) => setTimeout(resolve5, pollInterval));
+        await new Promise((resolve6) => setTimeout(resolve6, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error51) {
@@ -29166,7 +29166,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve5, reject) => {
+    return new Promise((resolve6, reject) => {
       const earlyReject = (error51) => {
         reject(error51);
       };
@@ -29244,7 +29244,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve5(parseResult.data);
+            resolve6(parseResult.data);
           }
         } catch (error51) {
           reject(error51);
@@ -29505,12 +29505,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve5, reject) => {
+    return new Promise((resolve6, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve5, interval);
+      const timeoutId = setTimeout(resolve6, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -30601,7 +30601,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve5) => setTimeout(resolve5, pollInterval));
+      await new Promise((resolve6) => setTimeout(resolve6, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -31265,12 +31265,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve5) => {
+    return new Promise((resolve6) => {
       const json2 = serializeMessage(message);
       if (this._stdout.write(json2)) {
-        resolve5();
+        resolve6();
       } else {
-        this._stdout.once("drain", resolve5);
+        this._stdout.once("drain", resolve6);
       }
     });
   }
@@ -32783,6 +32783,27 @@ var handoffBundleManifestSchema = external_exports.object({
   excludedContent: external_exports.array(external_exports.string()),
   entries: external_exports.array(handoffBundleManifestEntrySchema)
 }).strict();
+function prepareGeneratedBundleFile(input) {
+  const id = bundleSourceFileSchema.shape.id.parse(input.id);
+  const fileName = safeName(input.fileName);
+  const role = bundleFileRoleSchema.parse(input.role);
+  const folder = role === "evidence" ? "evidence" : "session";
+  const archivePath = `${folder}/${safeName(id)}-${fileName}`;
+  return {
+    sourcePath: "<generated>",
+    data: input.data,
+    entry: {
+      id,
+      role,
+      archivePath,
+      fileName,
+      ...input.description ? { description: input.description } : {},
+      ...input.mediaType ? { mediaType: input.mediaType } : {},
+      size: input.data.byteLength,
+      sha256: sha256(input.data)
+    }
+  };
+}
 async function isZipArchive(filePath) {
   const handle = await open(resolve(filePath), "r");
   try {
@@ -33545,13 +33566,189 @@ async function loadWorkflowDefaults(filePath) {
   return workflowDefaultsSchema.parse(value);
 }
 
+// src/session-export.ts
+import { readFile as readFile4 } from "node:fs/promises";
+import { resolve as resolve4 } from "node:path";
+var portableEventFields = {
+  "session.start": [
+    "sessionId",
+    "version",
+    "producer",
+    "copilotVersion",
+    "startTime",
+    "selectedModel",
+    "reasoningEffort",
+    "contextTier",
+    "context"
+  ],
+  "session.resume": [
+    "resumeTime",
+    "eventCount",
+    "eventsFileSizeBytes",
+    "selectedModel",
+    "reasoningEffort",
+    "contextTier",
+    "context"
+  ],
+  "session.model_change": [
+    "source",
+    "newModel",
+    "previousModel",
+    "reasoningEffort",
+    "previousReasoningEffort",
+    "contextTier"
+  ],
+  "session.context_changed": ["context"],
+  "session.info": ["message", "infoType"],
+  "session.warning": ["message", "warningType"],
+  "session.error": ["message", "errorType"],
+  "user.message": [
+    "content",
+    "delivery",
+    "interactionId",
+    "turnId",
+    "parentAgentTaskId"
+  ],
+  "assistant.message": [
+    "messageId",
+    "model",
+    "content",
+    "toolRequests",
+    "interactionId",
+    "turnId"
+  ],
+  "assistant.turn_start": ["turnId"],
+  "assistant.turn_end": ["turnId"],
+  "tool.execution_start": [
+    "toolCallId",
+    "toolName",
+    "arguments",
+    "turnId",
+    "model"
+  ],
+  "tool.execution_complete": [
+    "toolCallId",
+    "model",
+    "interactionId",
+    "turnId",
+    "success",
+    "result"
+  ],
+  "permission.requested": [
+    "requestId",
+    "permissionRequest",
+    "promptRequest"
+  ],
+  "permission.completed": ["requestId", "toolCallId", "result"],
+  "subagent.started": [
+    "toolCallId",
+    "agentName",
+    "agentDisplayName",
+    "agentDescription",
+    "model"
+  ],
+  "subagent.completed": [
+    "toolCallId",
+    "agentName",
+    "agentDisplayName",
+    "model",
+    "totalToolCalls",
+    "totalTokens",
+    "durationMs"
+  ],
+  "session.binary_asset": ["assetId", "type", "mimeType", "byteLength"]
+};
+var forbiddenKey = /^(reasoningOpaque|encryptedContent|toolTelemetry|hiddenReasoning|providerPrivateState|systemInstructions|credentials?|password|secret|token|api[-_]?key|client[-_]?secret|private[-_]?key|cookie|(api|access|refresh|auth|bearer)[-_]?token)$/i;
+async function exportSafeSessionEvents(sessionId, sessionStateRoot) {
+  const sourcePath = resolve4(sessionStateRoot, sessionId, "events.jsonl");
+  const input = await readFile4(sourcePath, "utf8");
+  const events = [];
+  const excludedEventTypes = {};
+  for (const [index, line] of input.split(/\r?\n/).entries()) {
+    if (!line.trim()) continue;
+    let value;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      throw new Error(
+        `Session event line ${index + 1} is not valid JSON: "${sourcePath}".`
+      );
+    }
+    if (!value || typeof value !== "object") continue;
+    const event = value;
+    const type = typeof event.type === "string" ? event.type : "unknown";
+    const fields = portableEventFields[type];
+    if (!fields) {
+      excludedEventTypes[type] = (excludedEventTypes[type] ?? 0) + 1;
+      continue;
+    }
+    const data2 = event.data && typeof event.data === "object" ? event.data : {};
+    const portableData = Object.fromEntries(
+      fields.flatMap((field) => field in data2 ? [[field, sanitizeValue(data2[field])]] : [])
+    );
+    events.push({
+      type,
+      ...typeof event.id === "string" ? { id: event.id } : {},
+      ...typeof event.timestamp === "string" ? { timestamp: event.timestamp } : {},
+      ...typeof event.parentId === "string" ? { parentId: event.parentId } : {},
+      data: portableData
+    });
+  }
+  const output = {
+    schemaVersion: "1.0",
+    sessionId,
+    source: "github-copilot-cli-events",
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    safety: {
+      policy: "event-and-field-allowlist",
+      excludedEventPrefixes: ["model.", "hook.", "system."],
+      excludedFields: [
+        "reasoningOpaque",
+        "encryptedContent",
+        "toolTelemetry",
+        "hiddenReasoning",
+        "providerPrivateState",
+        "systemInstructions",
+        "credentials",
+        "tokens",
+        "cookies"
+      ],
+      retainedEventCount: events.length,
+      excludedEventCount: Object.values(excludedEventTypes).reduce(
+        (total, count) => total + count,
+        0
+      ),
+      excludedEventTypes
+    },
+    events
+  };
+  const data = Buffer.from(JSON.stringify(output, null, 2), "utf8");
+  return {
+    sourcePath,
+    fileName: `${sessionId}.safe-session-events.json`,
+    data,
+    eventCount: events.length,
+    excludedEventCount: output.safety.excludedEventCount,
+    excludedEventTypes
+  };
+}
+function sanitizeValue(value) {
+  if (Array.isArray(value)) return value.map(sanitizeValue);
+  if (value && typeof value === "object") {
+    return redactValue(Object.fromEntries(
+      Object.entries(value).filter(([key]) => !forbiddenKey.test(key)).map(([key, item]) => [key, sanitizeValue(item)])
+    ));
+  }
+  return redactValue(value);
+}
+
 // src/server.ts
 var actor = actorReferenceSchema.parse({
   id: process.env.HANDOFF_ACTOR_ID ?? "person:local-user",
   kind: process.env.HANDOFF_ACTOR_KIND ?? "person"
 });
-var storeRoot = resolve4(
-  process.env.HANDOFF_STORE_DIR ?? resolve4(homedir(), ".copilot", "session-handoffs")
+var storeRoot = resolve5(
+  process.env.HANDOFF_STORE_DIR ?? resolve5(homedir(), ".copilot", "session-handoffs")
 );
 var trustedGateway = process.env.HANDOFF_TRUSTED_GATEWAY === "1";
 var toolProfile = process.env.HANDOFF_TOOL_PROFILE ?? "full";
@@ -33587,7 +33784,7 @@ var createHandoffBundleInputSchema = createHandoffPackageInputSchema.extend({
 }).strict();
 var server = new McpServer({
   name: "copilot-session-handoff",
-  version: "0.2.0"
+  version: "0.2.1"
 });
 if (toolEnabled("create_handoff")) server.registerTool("create_handoff", {
   description: "Create a portable Agency Flow v1 handoff. Before calling, summarize the previous session in analysisRecord: put the overall result in summary, completed work in observations, decisions in decisions, unresolved items in openQuestions, and remaining work in nextSteps. The server turns that explicit record into a session-summary checkpoint and generates identity, timestamp, redaction metadata, and SHA-256 integrity.",
@@ -33624,19 +33821,42 @@ if (toolEnabled("create_handoff_package")) server.registerTool("create_handoff_p
   });
 });
 if (toolEnabled("create_handoff_bundle")) server.registerTool("create_handoff_bundle", {
-  description: "PRIMARY/default Copilot CLI export. Create a portable ZIP containing the structured handoff package plus explicitly selected high-fidelity session, CLI share, and evidence files. File contents are copied only when includeFileContents and sensitivityReviewConfirmed are true. Source files must be regular non-symlink files and are limited to 100 MiB each and 250 MiB total. The ZIP is not encrypted and must still be transferred through an approved secure channel.",
+  description: "The single default Copilot CLI export. Always create a portable ZIP. If sessionHistoryFile is omitted, generate a safe high-fidelity JSON from the Copilot session identified by runId. Automatically include every local artifacts[].path file as bundled evidence. Explicitly supplied evidenceFiles and an optional CLI share file are also included. File contents are copied only when includeFileContents and sensitivityReviewConfirmed are true. The ZIP is not encrypted and must be transferred through an approved secure channel.",
   inputSchema: createHandoffBundleInputSchema.shape
 }, async (input) => {
-  const selectedFiles = await prepareBundleFiles([
+  const runId = resolveWorkflowRunId(input);
+  const artifactSelection = artifactBundleSelection(input.artifacts ?? []);
+  const selectedSourceFiles = await prepareBundleFiles([
     ...input.sessionHistoryFile ? [{ ...input.sessionHistoryFile, role: "session-history" }] : [],
     ...input.sessionShareFile ? [{ ...input.sessionShareFile, role: "session-share" }] : [],
     ...input.evidenceFiles.map((file2) => ({
       ...file2,
       role: "evidence"
-    }))
+    })),
+    ...artifactSelection.files
   ]);
+  const safeSessionExport = input.sessionHistoryFile ? void 0 : await exportSafeSessionEvents(
+    runId,
+    process.env.HANDOFF_SESSION_STATE_DIR ?? resolve5(homedir(), ".copilot", "session-state")
+  );
+  const generatedSessionFile = safeSessionExport ? prepareGeneratedBundleFile({
+    id: "safe-session-history",
+    fileName: safeSessionExport.fileName,
+    data: safeSessionExport.data,
+    role: "session-history",
+    description: "Allowlisted high-fidelity Copilot CLI session events",
+    mediaType: "application/json"
+  }) : void 0;
+  const selectedFiles = [
+    ...generatedSessionFile ? [generatedSessionFile] : [],
+    ...selectedSourceFiles
+  ];
   const { handoff, verification } = await createWorkflowHandoff(
-    input,
+    {
+      ...input,
+      runId,
+      artifacts: artifactSelection.remainingArtifacts
+    },
     bundleArtifactReferences(selectedFiles)
   );
   const bundle = await createHandoffBundle(
@@ -33656,6 +33876,14 @@ if (toolEnabled("create_handoff_bundle")) server.registerTool("create_handoff_bu
     milestoneCheckpoints: milestoneValidation.milestones,
     findingEvidenceMap: milestoneValidation.findingEvidenceMap,
     includedFiles: bundle.includedFiles,
+    ...safeSessionExport ? {
+      safeSessionExport: {
+        sourcePath: safeSessionExport.sourcePath,
+        retainedEventCount: safeSessionExport.eventCount,
+        excludedEventCount: safeSessionExport.excludedEventCount,
+        excludedEventTypes: safeSessionExport.excludedEventTypes
+      }
+    } : {},
     secureTransferRequired: true,
     packageContainsFileContents: true,
     securityNotice: "The ZIP is an integrity-checked container, not an encrypted transport. Transfer it only through an approved case attachment or access-controlled secure channel.",
@@ -33762,7 +33990,7 @@ async function continueHandoffBundleFile(filePath, options, extractionDirectory)
   const imported = await store.importPackage(verifiedBundle.package);
   const extracted = await extractVerifiedHandoffBundle(
     verifiedBundle,
-    extractionDirectory ?? resolve4(storeRoot, "bundles")
+    extractionDirectory ?? resolve5(storeRoot, "bundles")
   );
   return continueImportedHandoff(
     imported,
@@ -33971,7 +34199,7 @@ async function createWorkflowHandoff(input, additionalArtifacts = []) {
     platform: input.source?.platform ?? workflowDefaults.export.platform,
     workflowId: input.source?.workflowId ?? workflowDefaults.export.workflowId,
     workflowRevision: input.source?.workflowRevision ?? workflowDefaults.export.workflowRevision,
-    runId: input.runId ?? input.source?.runId ?? process.env.HANDOFF_SESSION_ID ?? workflowDefaults.export.fallbackRunId,
+    runId: resolveWorkflowRunId(input),
     nodeId: input.source?.nodeId ?? workflowDefaults.export.nodeId,
     ...input.source?.nodeLabel ? { nodeLabel: input.source.nodeLabel } : {},
     ...input.source?.agent ? { agent: input.source.agent } : {},
@@ -34007,6 +34235,28 @@ async function createWorkflowHandoff(input, additionalArtifacts = []) {
     );
   }
   return { handoff, verification };
+}
+function resolveWorkflowRunId(input) {
+  return input.runId ?? input.source?.runId ?? process.env.HANDOFF_SESSION_ID ?? workflowDefaults.export.fallbackRunId;
+}
+function artifactBundleSelection(artifacts) {
+  const files = [];
+  const remainingArtifacts = [];
+  for (const [index, artifact] of artifacts.entries()) {
+    if (typeof artifact.path !== "string") {
+      remainingArtifacts.push(artifact);
+      continue;
+    }
+    const id = typeof artifact.id === "string" && artifact.id.length > 0 ? artifact.id : `evidence-${index + 1}`;
+    files.push({
+      id,
+      filePath: artifact.path,
+      role: "evidence",
+      ...typeof artifact.description === "string" ? { description: artifact.description } : {},
+      ...typeof artifact.mediaType === "string" ? { mediaType: artifact.mediaType } : {}
+    });
+  }
+  return { files, remainingArtifacts };
 }
 function result(value) {
   return {
@@ -34096,7 +34346,6 @@ function toolEnabled(toolName) {
   if (toolProfile === "full") return true;
   if (toolProfile === "cli") {
     return [
-      "create_handoff_package",
       "create_handoff_bundle",
       "continue_from_handoff"
     ].includes(toolName);

@@ -11,6 +11,7 @@ import {
   extractVerifiedHandoffBundle,
   isZipArchive,
   prepareBundleFiles,
+  prepareGeneratedBundleFile,
   verifyHandoffBundle,
   type ExtractedBundle,
   type HandoffBundleManifest,
@@ -32,6 +33,7 @@ import {
   validateMilestoneEvidenceLinks,
 } from './checkpoint.js'
 import { loadWorkflowDefaults } from './defaults.js'
+import { exportSafeSessionEvents } from './session-export.js'
 
 const actor = actorReferenceSchema.parse({
   id: process.env.HANDOFF_ACTOR_ID ?? 'person:local-user',
@@ -79,7 +81,7 @@ const createHandoffBundleInputSchema = createHandoffPackageInputSchema.extend({
 
 const server = new McpServer({
   name: 'copilot-session-handoff',
-  version: '0.2.0',
+  version: '0.2.1',
 })
 
 if (toolEnabled('create_handoff')) server.registerTool('create_handoff', {
@@ -124,10 +126,12 @@ if (toolEnabled('create_handoff_package')) server.registerTool('create_handoff_p
 
 if (toolEnabled('create_handoff_bundle')) server.registerTool('create_handoff_bundle', {
   description:
-    'PRIMARY/default Copilot CLI export. Create a portable ZIP containing the structured handoff package plus explicitly selected high-fidelity session, CLI share, and evidence files. File contents are copied only when includeFileContents and sensitivityReviewConfirmed are true. Source files must be regular non-symlink files and are limited to 100 MiB each and 250 MiB total. The ZIP is not encrypted and must still be transferred through an approved secure channel.',
+    'The single default Copilot CLI export. Always create a portable ZIP. If sessionHistoryFile is omitted, generate a safe high-fidelity JSON from the Copilot session identified by runId. Automatically include every local artifacts[].path file as bundled evidence. Explicitly supplied evidenceFiles and an optional CLI share file are also included. File contents are copied only when includeFileContents and sensitivityReviewConfirmed are true. The ZIP is not encrypted and must be transferred through an approved secure channel.',
   inputSchema: createHandoffBundleInputSchema.shape,
 }, async (input) => {
-  const selectedFiles = await prepareBundleFiles([
+  const runId = resolveWorkflowRunId(input)
+  const artifactSelection = artifactBundleSelection(input.artifacts ?? [])
+  const selectedSourceFiles = await prepareBundleFiles([
     ...(input.sessionHistoryFile
       ? [{ ...input.sessionHistoryFile, role: 'session-history' as const }]
       : []),
@@ -138,9 +142,36 @@ if (toolEnabled('create_handoff_bundle')) server.registerTool('create_handoff_bu
       ...file,
       role: 'evidence' as const,
     })),
+    ...artifactSelection.files,
   ])
+  const safeSessionExport = input.sessionHistoryFile
+    ? undefined
+    : await exportSafeSessionEvents(
+        runId,
+        process.env.HANDOFF_SESSION_STATE_DIR
+          ?? resolve(homedir(), '.copilot', 'session-state'),
+      )
+  const generatedSessionFile = safeSessionExport
+    ? prepareGeneratedBundleFile({
+        id: 'safe-session-history',
+        fileName: safeSessionExport.fileName,
+        data: safeSessionExport.data,
+        role: 'session-history',
+        description:
+          'Allowlisted high-fidelity Copilot CLI session events',
+        mediaType: 'application/json',
+      })
+    : undefined
+  const selectedFiles = [
+    ...(generatedSessionFile ? [generatedSessionFile] : []),
+    ...selectedSourceFiles,
+  ]
   const { handoff, verification } = await createWorkflowHandoff(
-    input,
+    {
+      ...input,
+      runId,
+      artifacts: artifactSelection.remainingArtifacts,
+    },
     bundleArtifactReferences(selectedFiles),
   )
   const bundle = await createHandoffBundle(
@@ -162,6 +193,16 @@ if (toolEnabled('create_handoff_bundle')) server.registerTool('create_handoff_bu
     milestoneCheckpoints: milestoneValidation.milestones,
     findingEvidenceMap: milestoneValidation.findingEvidenceMap,
     includedFiles: bundle.includedFiles,
+    ...(safeSessionExport
+      ? {
+          safeSessionExport: {
+            sourcePath: safeSessionExport.sourcePath,
+            retainedEventCount: safeSessionExport.eventCount,
+            excludedEventCount: safeSessionExport.excludedEventCount,
+            excludedEventTypes: safeSessionExport.excludedEventTypes,
+          },
+        }
+      : {}),
     secureTransferRequired: true,
     packageContainsFileContents: true,
     securityNotice:
@@ -548,11 +589,7 @@ async function createWorkflowHandoff(
     workflowRevision:
       input.source?.workflowRevision
       ?? workflowDefaults.export.workflowRevision,
-    runId:
-      input.runId
-      ?? input.source?.runId
-      ?? process.env.HANDOFF_SESSION_ID
-      ?? workflowDefaults.export.fallbackRunId,
+    runId: resolveWorkflowRunId(input),
     nodeId: input.source?.nodeId ?? workflowDefaults.export.nodeId,
     ...(input.source?.nodeLabel
       ? { nodeLabel: input.source.nodeLabel }
@@ -592,6 +629,58 @@ async function createWorkflowHandoff(
     )
   }
   return { handoff, verification }
+}
+
+function resolveWorkflowRunId(
+  input: z.infer<typeof createHandoffPackageInputSchema>,
+): string {
+  return input.runId
+    ?? input.source?.runId
+    ?? process.env.HANDOFF_SESSION_ID
+    ?? workflowDefaults.export.fallbackRunId
+}
+
+function artifactBundleSelection(
+  artifacts: Array<Record<string, unknown>>,
+): {
+  files: Array<{
+    id: string
+    filePath: string
+    role: 'evidence'
+    description?: string
+    mediaType?: string
+  }>
+  remainingArtifacts: Array<Record<string, unknown>>
+} {
+  const files: Array<{
+    id: string
+    filePath: string
+    role: 'evidence'
+    description?: string
+    mediaType?: string
+  }> = []
+  const remainingArtifacts: Array<Record<string, unknown>> = []
+  for (const [index, artifact] of artifacts.entries()) {
+    if (typeof artifact.path !== 'string') {
+      remainingArtifacts.push(artifact)
+      continue
+    }
+    const id = typeof artifact.id === 'string' && artifact.id.length > 0
+      ? artifact.id
+      : `evidence-${index + 1}`
+    files.push({
+      id,
+      filePath: artifact.path,
+      role: 'evidence',
+      ...(typeof artifact.description === 'string'
+        ? { description: artifact.description }
+        : {}),
+      ...(typeof artifact.mediaType === 'string'
+        ? { mediaType: artifact.mediaType }
+        : {}),
+    })
+  }
+  return { files, remainingArtifacts }
 }
 
 function result(value: Record<string, unknown>) {
@@ -723,7 +812,6 @@ function toolEnabled(toolName: string): boolean {
   if (toolProfile === 'full') return true
   if (toolProfile === 'cli') {
     return [
-      'create_handoff_package',
       'create_handoff_bundle',
       'continue_from_handoff',
     ].includes(toolName)

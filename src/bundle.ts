@@ -71,10 +71,39 @@ export type HandoffBundleManifestEntry = z.infer<
   typeof handoffBundleManifestEntrySchema
 >
 
-interface PreparedBundleFile {
+export interface PreparedBundleFile {
   sourcePath: string
   data: Uint8Array
   entry: HandoffBundleManifestEntry
+}
+
+export function prepareGeneratedBundleFile(input: {
+  id: string
+  fileName: string
+  data: Uint8Array
+  role: BundleFileRole
+  description?: string
+  mediaType?: string
+}): PreparedBundleFile {
+  const id = bundleSourceFileSchema.shape.id.parse(input.id)
+  const fileName = safeName(input.fileName)
+  const role = bundleFileRoleSchema.parse(input.role)
+  const folder = role === 'evidence' ? 'evidence' : 'session'
+  const archivePath = `${folder}/${safeName(id)}-${fileName}`
+  return {
+    sourcePath: '<generated>',
+    data: input.data,
+    entry: {
+      id,
+      role,
+      archivePath,
+      fileName,
+      ...(input.description ? { description: input.description } : {}),
+      ...(input.mediaType ? { mediaType: input.mediaType } : {}),
+      size: input.data.byteLength,
+      sha256: sha256(input.data),
+    },
+  }
 }
 
 export interface VerifiedHandoffBundle {

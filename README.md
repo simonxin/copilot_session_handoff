@@ -218,8 +218,10 @@ conversation history or hidden reasoning. The tool creates the checkpoint and
 package, adds only the explicitly reviewed session and evidence files, verifies
 integrity, and writes one `.handoff-bundle.zip`.
 
-Use `create_handoff_package` as the metadata-only JSON fallback when file
-contents must not be copied or ZIP transfer is unavailable.
+The normal CLI plugin profile exposes only `create_handoff_bundle` and
+`continue_from_handoff`, so the agent cannot accidentally select the old JSON
+export. `create_handoff_package` remains available in the `full` administrative
+profile as a metadata-only fallback.
 
 On the receiving side, use `continue_from_handoff` for both formats. It detects
 ZIP input from its file signature and applies bundle verification and isolated
@@ -264,10 +266,18 @@ session export, an optional CLI `/share` file, and original evidence in one
 portable ZIP. It does not replace the safer metadata-only default.
 
 The caller must set both `includeFileContents=true` and
-`sensitivityReviewConfirmed=true`. The selected inputs are explicit individual
-files; directories and symlinks are rejected. Each file is limited to 100 MiB,
-the uncompressed bundle content is limited to 250 MiB, and an archive may
-contain at most 100 entries.
+`sensitivityReviewConfirmed=true`. When `sessionHistoryFile` is omitted, the
+MCP uses `runId` to read
+`%USERPROFILE%\.copilot\session-state\<runId>\events.jsonl` and generates an
+allowlisted `safe-session-events.json`. It excludes all `system.*`, `model.*`,
+and `hook.*` events and removes fields such as `reasoningOpaque`,
+`encryptedContent`, and `toolTelemetry`.
+
+Every local `artifacts[].path` is automatically included under `evidence/`;
+callers do not need to repeat those files in `evidenceFiles`. Non-file artifact
+references remain metadata-only. Directories and symlinks are rejected. Each
+file is limited to 100 MiB, the uncompressed bundle content is limited to
+250 MiB, and an archive may contain at most 100 entries.
 
 ```text
 handoff-<id>.handoff-bundle.zip
