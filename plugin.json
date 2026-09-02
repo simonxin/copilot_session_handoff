@@ -1,7 +1,7 @@
 {
   "name": "copilot-session-handoff",
   "description": "Create verified Copilot session handoff ZIP bundles with checkpoints, session history, and evidence.",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "author": {
     "name": "simonxin",
     "url": "https://github.com/simonxin"
@@ -16,5 +16,6 @@
     "mcp"
   ],
   "category": "developer-tools",
+  "skills": "skills/",
   "mcpServers": ".mcp.json"
 }

@@ -280,6 +280,16 @@ references remain metadata-only. Directories and symlinks are rejected. Each
 file is limited to 100 MiB, the uncompressed bundle content is limited to
 250 MiB, and an archive may contain at most 100 entries.
 
+If a repeated export omits `artifacts` and `evidenceFiles`, the MCP recovers
+existing evidence files that were explicitly supplied to an earlier handoff
+export call in the same Copilot session. The receipt lists these under
+`autoDiscoveredEvidence`. Explicit paths still take precedence.
+
+The plugin also includes the `session-handoff-export` skill. It directs Copilot
+to load the deferred MCP tool before use, forbids unsupported "0 tools" claims,
+and requires the agent to verify that evidence entries exist before reporting a
+successful evidence-inclusive export.
+
 ```text
 handoff-<id>.handoff-bundle.zip
 ├── manifest.json

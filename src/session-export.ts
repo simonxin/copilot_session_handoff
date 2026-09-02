@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { lstat, readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { redactValue } from './security.js'
 
@@ -103,6 +103,82 @@ export interface SafeSessionExport {
   excludedEventTypes: Record<string, number>
 }
 
+export interface DiscoveredSessionEvidence {
+  id: string
+  filePath: string
+  description?: string
+  mediaType?: string
+}
+
+export async function discoverSessionEvidence(
+  sessionId: string,
+  sessionStateRoot: string,
+): Promise<DiscoveredSessionEvidence[]> {
+  const sourcePath = resolve(sessionStateRoot, sessionId, 'events.jsonl')
+  let input: string
+  try {
+    input = await readFile(sourcePath, 'utf8')
+  } catch (error) {
+    if (isNotFoundError(error)) return []
+    throw error
+  }
+  const candidates: Array<Omit<DiscoveredSessionEvidence, 'id'>> = []
+
+  for (const [index, line] of input.split(/\r?\n/).entries()) {
+    if (!line.trim()) continue
+    let value: unknown
+    try {
+      value = JSON.parse(line)
+    } catch {
+      throw new Error(
+        `Session event line ${index + 1} is not valid JSON: "${sourcePath}".`,
+      )
+    }
+    if (!value || typeof value !== 'object') continue
+    const event = value as Record<string, unknown>
+    if (event.type !== 'tool.execution_start') continue
+    const data = event.data && typeof event.data === 'object'
+      ? event.data as Record<string, unknown>
+      : {}
+    if (
+      typeof data.toolName !== 'string'
+      || !isHandoffExportTool(data.toolName)
+      || !data.arguments
+      || typeof data.arguments !== 'object'
+    ) {
+      continue
+    }
+    const args = data.arguments as Record<string, unknown>
+    collectArtifactCandidates(args.artifacts, candidates)
+    collectEvidenceFileCandidates(args.evidenceFiles, candidates)
+  }
+
+  const discovered: DiscoveredSessionEvidence[] = []
+  const paths = new Set<string>()
+  for (const candidate of candidates) {
+    const filePath = resolve(candidate.filePath)
+    if (paths.has(filePath)) continue
+    let status: Awaited<ReturnType<typeof lstat>>
+    try {
+      status = await lstat(filePath)
+    } catch (error) {
+      if (isNotFoundError(error)) continue
+      throw error
+    }
+    if (!status.isFile() || status.isSymbolicLink()) continue
+    paths.add(filePath)
+    discovered.push({
+      id: `session-evidence-${discovered.length + 1}`,
+      filePath,
+      ...(candidate.description
+        ? { description: candidate.description }
+        : {}),
+      ...(candidate.mediaType ? { mediaType: candidate.mediaType } : {}),
+    })
+  }
+  return discovered
+}
+
 export async function exportSafeSessionEvents(
   sessionId: string,
   sessionStateRoot: string,
@@ -188,6 +264,65 @@ export async function exportSafeSessionEvents(
     excludedEventCount: output.safety.excludedEventCount,
     excludedEventTypes,
   }
+}
+
+function isHandoffExportTool(toolName: string): boolean {
+  return [
+    'export_session_handoff',
+    'create_handoff_bundle',
+    'create_handoff_package',
+  ].some((name) => toolName.endsWith(name))
+}
+
+function collectArtifactCandidates(
+  value: unknown,
+  target: Array<Omit<DiscoveredSessionEvidence, 'id'>>,
+): void {
+  if (!Array.isArray(value)) return
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const artifact = item as Record<string, unknown>
+    if (typeof artifact.path !== 'string') continue
+    target.push({
+      filePath: artifact.path,
+      ...(typeof artifact.description === 'string'
+        ? { description: artifact.description }
+        : {}),
+      ...(typeof artifact.mediaType === 'string'
+        ? { mediaType: artifact.mediaType }
+        : {}),
+    })
+  }
+}
+
+function collectEvidenceFileCandidates(
+  value: unknown,
+  target: Array<Omit<DiscoveredSessionEvidence, 'id'>>,
+): void {
+  if (!Array.isArray(value)) return
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const evidence = item as Record<string, unknown>
+    if (typeof evidence.filePath !== 'string') continue
+    target.push({
+      filePath: evidence.filePath,
+      ...(typeof evidence.description === 'string'
+        ? { description: evidence.description }
+        : {}),
+      ...(typeof evidence.mediaType === 'string'
+        ? { mediaType: evidence.mediaType }
+        : {}),
+    })
+  }
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && 'code' in error
+    && error.code === 'ENOENT',
+  )
 }
 
 function sanitizeValue(value: unknown): unknown {

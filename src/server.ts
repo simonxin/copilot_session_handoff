@@ -13,6 +13,7 @@ import {
   prepareBundleFiles,
   prepareGeneratedBundleFile,
   verifyHandoffBundle,
+  type BundleSourceFile,
   type ExtractedBundle,
   type HandoffBundleManifest,
 } from './bundle.js'
@@ -33,7 +34,10 @@ import {
   validateMilestoneEvidenceLinks,
 } from './checkpoint.js'
 import { loadWorkflowDefaults } from './defaults.js'
-import { exportSafeSessionEvents } from './session-export.js'
+import {
+  discoverSessionEvidence,
+  exportSafeSessionEvents,
+} from './session-export.js'
 
 const actor = actorReferenceSchema.parse({
   id: process.env.HANDOFF_ACTOR_ID ?? 'person:local-user',
@@ -81,7 +85,7 @@ const createHandoffBundleInputSchema = createHandoffPackageInputSchema.extend({
 
 const server = new McpServer({
   name: 'copilot-session-handoff',
-  version: '0.2.2',
+  version: '0.2.3',
 })
 
 if (toolEnabled('create_handoff')) server.registerTool('create_handoff', {
@@ -130,7 +134,20 @@ if (toolEnabled('export_session_handoff')) server.registerTool('export_session_h
   inputSchema: createHandoffBundleInputSchema.shape,
 }, async (input) => {
   const runId = resolveWorkflowRunId(input)
+  const sessionStateRoot = process.env.HANDOFF_SESSION_STATE_DIR
+    ?? resolve(homedir(), '.copilot', 'session-state')
   const artifactSelection = artifactBundleSelection(input.artifacts ?? [])
+  const discoveredEvidence = await discoverSessionEvidence(
+    runId,
+    sessionStateRoot,
+  )
+  const evidenceSelection = mergeEvidenceFiles(
+    [
+      ...input.evidenceFiles,
+      ...artifactSelection.files,
+    ],
+    discoveredEvidence,
+  )
   const selectedSourceFiles = await prepareBundleFiles([
     ...(input.sessionHistoryFile
       ? [{ ...input.sessionHistoryFile, role: 'session-history' as const }]
@@ -138,18 +155,16 @@ if (toolEnabled('export_session_handoff')) server.registerTool('export_session_h
     ...(input.sessionShareFile
       ? [{ ...input.sessionShareFile, role: 'session-share' as const }]
       : []),
-    ...input.evidenceFiles.map((file) => ({
+    ...evidenceSelection.files.map((file) => ({
       ...file,
       role: 'evidence' as const,
     })),
-    ...artifactSelection.files,
   ])
   const safeSessionExport = input.sessionHistoryFile
     ? undefined
     : await exportSafeSessionEvents(
         runId,
-        process.env.HANDOFF_SESSION_STATE_DIR
-          ?? resolve(homedir(), '.copilot', 'session-state'),
+        sessionStateRoot,
       )
   const generatedSessionFile = safeSessionExport
     ? prepareGeneratedBundleFile({
@@ -193,6 +208,12 @@ if (toolEnabled('export_session_handoff')) server.registerTool('export_session_h
     milestoneCheckpoints: milestoneValidation.milestones,
     findingEvidenceMap: milestoneValidation.findingEvidenceMap,
     includedFiles: bundle.includedFiles,
+    autoDiscoveredEvidence: evidenceSelection.discovered.map((file) => ({
+      id: file.id,
+      filePath: file.filePath,
+      ...(file.description ? { description: file.description } : {}),
+      ...(file.mediaType ? { mediaType: file.mediaType } : {}),
+    })),
     ...(safeSessionExport
       ? {
           safeSessionExport: {
@@ -681,6 +702,35 @@ function artifactBundleSelection(
     })
   }
   return { files, remainingArtifacts }
+}
+
+function mergeEvidenceFiles(
+  explicit: BundleSourceFile[],
+  discovered: BundleSourceFile[],
+): {
+  files: BundleSourceFile[]
+  discovered: BundleSourceFile[]
+} {
+  const files = [...explicit]
+  const selectedPaths = new Set(explicit.map((file) => resolve(file.filePath)))
+  const selectedIds = new Set(explicit.map((file) => file.id))
+  const added: BundleSourceFile[] = []
+  for (const candidate of discovered) {
+    const filePath = resolve(candidate.filePath)
+    if (selectedPaths.has(filePath)) continue
+    let id = candidate.id
+    let suffix = 2
+    while (selectedIds.has(id)) {
+      id = `${candidate.id}-${suffix}`
+      suffix += 1
+    }
+    const file = { ...candidate, id, filePath }
+    files.push(file)
+    added.push(file)
+    selectedPaths.add(filePath)
+    selectedIds.add(id)
+  }
+  return { files, discovered: added }
 }
 
 function result(value: Record<string, unknown>) {

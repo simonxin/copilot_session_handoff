@@ -89,6 +89,20 @@ def test_tool_profiles_expose_only_host_specific_tools(tmp_path: Path) -> None:
 
 def test_plugin_manifest_launches_bundled_mcp(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[1]
+    plugin_manifest = json.loads(
+        (root / "plugin.json").read_text(encoding="utf-8")
+    )
+    skill = (
+        root
+        / plugin_manifest["skills"]
+        / "session-handoff-export"
+        / "SKILL.md"
+    )
+    assert skill.is_file()
+    skill_content = skill.read_text(encoding="utf-8")
+    assert "copilot-session-handoff-export_session_handoff" in skill_content
+    assert "do not report success unless" in skill_content
+
     manifest = json.loads((root / ".mcp.json").read_text(encoding="utf-8"))
     configuration = manifest["mcpServers"]["copilot-session-handoff"]
     assert "HANDOFF_DEFAULTS_FILE" not in configuration["env"]
@@ -624,6 +638,11 @@ def test_default_bundle_auto_exports_safe_session_and_artifact_files(
     session_id = "session-auto-bundle"
     session_directory = tmp_path / "session-state" / session_id
     session_directory.mkdir(parents=True)
+    evidence_file = tmp_path / "authentication.har"
+    evidence_file.write_text(
+        '{"log":{"entries":[{"response":{"status":401}}]}}',
+        encoding="utf-8",
+    )
     events = [
         {
             "type": "session.start",
@@ -690,14 +709,28 @@ def test_default_bundle_auto_exports_safe_session_and_artifact_files(
                 "toolTelemetry": {"duration": 123},
             },
         },
+        {
+            "type": "tool.execution_start",
+            "id": "event-prior-handoff",
+            "timestamp": "2026-09-02T01:00:07.000Z",
+            "data": {
+                "toolName": (
+                    "copilot-session-handoff-create_handoff_bundle"
+                ),
+                "arguments": {
+                    "artifacts": [
+                        {
+                            "path": str(evidence_file),
+                            "description": "Original authentication HAR",
+                            "mediaType": "application/json",
+                        }
+                    ]
+                },
+            },
+        },
     ]
     (session_directory / "events.jsonl").write_text(
         "\n".join(json.dumps(event) for event in events),
-        encoding="utf-8",
-    )
-    evidence_file = tmp_path / "authentication.har"
-    evidence_file.write_text(
-        '{"log":{"entries":[{"response":{"status":401}}]}}',
         encoding="utf-8",
     )
 
@@ -718,14 +751,6 @@ def test_default_bundle_auto_exports_safe_session_and_artifact_files(
                     "observations": ["Reviewed the HAR."],
                     "nextSteps": ["Revalidate after import."],
                 },
-                "artifacts": [
-                    {
-                        "id": "authentication-har",
-                        "path": str(evidence_file),
-                        "description": "Original authentication HAR",
-                        "mediaType": "application/json",
-                    }
-                ],
                 "includeFileContents": True,
                 "sensitivityReviewConfirmed": True,
                 "destinationDirectory": str(tmp_path / "auto-bundles"),
@@ -735,7 +760,7 @@ def test_default_bundle_auto_exports_safe_session_and_artifact_files(
         producer.close()
 
     assert bundled["exportFormat"] == "bundle"
-    assert bundled["safeSessionExport"]["retainedEventCount"] == 4
+    assert bundled["safeSessionExport"]["retainedEventCount"] == 5
     assert bundled["safeSessionExport"]["excludedEventCount"] == 3
     assert bundled["safeSessionExport"]["excludedEventTypes"] == {
         "system.message": 1,
@@ -745,6 +770,14 @@ def test_default_bundle_auto_exports_safe_session_and_artifact_files(
     assert [item["role"] for item in bundled["includedFiles"]] == [
         "session-history",
         "evidence",
+    ]
+    assert bundled["autoDiscoveredEvidence"] == [
+        {
+            "id": "session-evidence-1",
+            "filePath": str(evidence_file.resolve()),
+            "description": "Original authentication HAR",
+            "mediaType": "application/json",
+        }
     ]
 
     with zipfile.ZipFile(bundled["bundlePath"]) as archive:
@@ -777,7 +810,7 @@ def test_default_bundle_auto_exports_safe_session_and_artifact_files(
         evidence_artifact = next(
             item
             for item in package["content"]["artifacts"]
-            if item["id"] == "authentication-har"
+            if item["id"] == "session-evidence-1"
         )
         assert evidence_artifact["uri"].startswith("bundle://evidence/")
         assert str(evidence_file) not in json.dumps(package)

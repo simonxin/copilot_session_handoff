@@ -33567,7 +33567,7 @@ async function loadWorkflowDefaults(filePath) {
 }
 
 // src/session-export.ts
-import { readFile as readFile4 } from "node:fs/promises";
+import { lstat as lstat2, readFile as readFile4 } from "node:fs/promises";
 import { resolve as resolve4 } from "node:path";
 var portableEventFields = {
   "session.start": [
@@ -33659,6 +33659,60 @@ var portableEventFields = {
   "session.binary_asset": ["assetId", "type", "mimeType", "byteLength"]
 };
 var forbiddenKey = /^(reasoningOpaque|encryptedContent|toolTelemetry|hiddenReasoning|providerPrivateState|systemInstructions|credentials?|password|secret|token|api[-_]?key|client[-_]?secret|private[-_]?key|cookie|(api|access|refresh|auth|bearer)[-_]?token)$/i;
+async function discoverSessionEvidence(sessionId, sessionStateRoot) {
+  const sourcePath = resolve4(sessionStateRoot, sessionId, "events.jsonl");
+  let input;
+  try {
+    input = await readFile4(sourcePath, "utf8");
+  } catch (error51) {
+    if (isNotFoundError(error51)) return [];
+    throw error51;
+  }
+  const candidates = [];
+  for (const [index, line] of input.split(/\r?\n/).entries()) {
+    if (!line.trim()) continue;
+    let value;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      throw new Error(
+        `Session event line ${index + 1} is not valid JSON: "${sourcePath}".`
+      );
+    }
+    if (!value || typeof value !== "object") continue;
+    const event = value;
+    if (event.type !== "tool.execution_start") continue;
+    const data = event.data && typeof event.data === "object" ? event.data : {};
+    if (typeof data.toolName !== "string" || !isHandoffExportTool(data.toolName) || !data.arguments || typeof data.arguments !== "object") {
+      continue;
+    }
+    const args = data.arguments;
+    collectArtifactCandidates(args.artifacts, candidates);
+    collectEvidenceFileCandidates(args.evidenceFiles, candidates);
+  }
+  const discovered = [];
+  const paths = /* @__PURE__ */ new Set();
+  for (const candidate of candidates) {
+    const filePath = resolve4(candidate.filePath);
+    if (paths.has(filePath)) continue;
+    let status;
+    try {
+      status = await lstat2(filePath);
+    } catch (error51) {
+      if (isNotFoundError(error51)) continue;
+      throw error51;
+    }
+    if (!status.isFile() || status.isSymbolicLink()) continue;
+    paths.add(filePath);
+    discovered.push({
+      id: `session-evidence-${discovered.length + 1}`,
+      filePath,
+      ...candidate.description ? { description: candidate.description } : {},
+      ...candidate.mediaType ? { mediaType: candidate.mediaType } : {}
+    });
+  }
+  return discovered;
+}
 async function exportSafeSessionEvents(sessionId, sessionStateRoot) {
   const sourcePath = resolve4(sessionStateRoot, sessionId, "events.jsonl");
   const input = await readFile4(sourcePath, "utf8");
@@ -33732,6 +33786,44 @@ async function exportSafeSessionEvents(sessionId, sessionStateRoot) {
     excludedEventTypes
   };
 }
+function isHandoffExportTool(toolName) {
+  return [
+    "export_session_handoff",
+    "create_handoff_bundle",
+    "create_handoff_package"
+  ].some((name) => toolName.endsWith(name));
+}
+function collectArtifactCandidates(value, target) {
+  if (!Array.isArray(value)) return;
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const artifact = item;
+    if (typeof artifact.path !== "string") continue;
+    target.push({
+      filePath: artifact.path,
+      ...typeof artifact.description === "string" ? { description: artifact.description } : {},
+      ...typeof artifact.mediaType === "string" ? { mediaType: artifact.mediaType } : {}
+    });
+  }
+}
+function collectEvidenceFileCandidates(value, target) {
+  if (!Array.isArray(value)) return;
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const evidence = item;
+    if (typeof evidence.filePath !== "string") continue;
+    target.push({
+      filePath: evidence.filePath,
+      ...typeof evidence.description === "string" ? { description: evidence.description } : {},
+      ...typeof evidence.mediaType === "string" ? { mediaType: evidence.mediaType } : {}
+    });
+  }
+}
+function isNotFoundError(error51) {
+  return Boolean(
+    error51 && typeof error51 === "object" && "code" in error51 && error51.code === "ENOENT"
+  );
+}
 function sanitizeValue(value) {
   if (Array.isArray(value)) return value.map(sanitizeValue);
   if (value && typeof value === "object") {
@@ -33784,7 +33876,7 @@ var createHandoffBundleInputSchema = createHandoffPackageInputSchema.extend({
 }).strict();
 var server = new McpServer({
   name: "copilot-session-handoff",
-  version: "0.2.2"
+  version: "0.2.3"
 });
 if (toolEnabled("create_handoff")) server.registerTool("create_handoff", {
   description: "Create a portable Agency Flow v1 handoff. Before calling, summarize the previous session in analysisRecord: put the overall result in summary, completed work in observations, decisions in decisions, unresolved items in openQuestions, and remaining work in nextSteps. The server turns that explicit record into a session-summary checkpoint and generates identity, timestamp, redaction metadata, and SHA-256 integrity.",
@@ -33825,19 +33917,30 @@ if (toolEnabled("export_session_handoff")) server.registerTool("export_session_h
   inputSchema: createHandoffBundleInputSchema.shape
 }, async (input) => {
   const runId = resolveWorkflowRunId(input);
+  const sessionStateRoot = process.env.HANDOFF_SESSION_STATE_DIR ?? resolve5(homedir(), ".copilot", "session-state");
   const artifactSelection = artifactBundleSelection(input.artifacts ?? []);
+  const discoveredEvidence = await discoverSessionEvidence(
+    runId,
+    sessionStateRoot
+  );
+  const evidenceSelection = mergeEvidenceFiles(
+    [
+      ...input.evidenceFiles,
+      ...artifactSelection.files
+    ],
+    discoveredEvidence
+  );
   const selectedSourceFiles = await prepareBundleFiles([
     ...input.sessionHistoryFile ? [{ ...input.sessionHistoryFile, role: "session-history" }] : [],
     ...input.sessionShareFile ? [{ ...input.sessionShareFile, role: "session-share" }] : [],
-    ...input.evidenceFiles.map((file2) => ({
+    ...evidenceSelection.files.map((file2) => ({
       ...file2,
       role: "evidence"
-    })),
-    ...artifactSelection.files
+    }))
   ]);
   const safeSessionExport = input.sessionHistoryFile ? void 0 : await exportSafeSessionEvents(
     runId,
-    process.env.HANDOFF_SESSION_STATE_DIR ?? resolve5(homedir(), ".copilot", "session-state")
+    sessionStateRoot
   );
   const generatedSessionFile = safeSessionExport ? prepareGeneratedBundleFile({
     id: "safe-session-history",
@@ -33876,6 +33979,12 @@ if (toolEnabled("export_session_handoff")) server.registerTool("export_session_h
     milestoneCheckpoints: milestoneValidation.milestones,
     findingEvidenceMap: milestoneValidation.findingEvidenceMap,
     includedFiles: bundle.includedFiles,
+    autoDiscoveredEvidence: evidenceSelection.discovered.map((file2) => ({
+      id: file2.id,
+      filePath: file2.filePath,
+      ...file2.description ? { description: file2.description } : {},
+      ...file2.mediaType ? { mediaType: file2.mediaType } : {}
+    })),
     ...safeSessionExport ? {
       safeSessionExport: {
         sourcePath: safeSessionExport.sourcePath,
@@ -34257,6 +34366,28 @@ function artifactBundleSelection(artifacts) {
     });
   }
   return { files, remainingArtifacts };
+}
+function mergeEvidenceFiles(explicit, discovered) {
+  const files = [...explicit];
+  const selectedPaths = new Set(explicit.map((file2) => resolve5(file2.filePath)));
+  const selectedIds = new Set(explicit.map((file2) => file2.id));
+  const added = [];
+  for (const candidate of discovered) {
+    const filePath = resolve5(candidate.filePath);
+    if (selectedPaths.has(filePath)) continue;
+    let id = candidate.id;
+    let suffix = 2;
+    while (selectedIds.has(id)) {
+      id = `${candidate.id}-${suffix}`;
+      suffix += 1;
+    }
+    const file2 = { ...candidate, id, filePath };
+    files.push(file2);
+    added.push(file2);
+    selectedPaths.add(filePath);
+    selectedIds.add(id);
+  }
+  return { files, discovered: added };
 }
 function result(value) {
   return {
