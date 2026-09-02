@@ -1,7 +1,10 @@
 import json
+import zipfile
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from conftest import EXPECTED_TOOLS, McpProcess
 
@@ -71,6 +74,7 @@ def test_tool_profiles_expose_only_host_specific_tools(tmp_path: Path) -> None:
     )
     try:
         assert cli.list_tools() == {
+            "create_handoff_bundle",
             "create_handoff_package",
             "continue_from_handoff",
         }
@@ -100,6 +104,7 @@ def test_plugin_manifest_launches_bundled_mcp(tmp_path: Path) -> None:
     )
     try:
         assert plugin.list_tools() == {
+            "create_handoff_bundle",
             "create_handoff_package",
             "continue_from_handoff",
         }
@@ -205,6 +210,8 @@ def test_default_export_and_resume_workflows(tmp_path: Path) -> None:
     assert exported["verification"]["valid"] is True
     assert Path(exported["filePath"]).is_file()
     assert exported["defaultsUsed"]["workflowId"] == "custom-workflow"
+    assert exported["defaultsUsed"]["format"] == "bundle"
+    assert exported["exportFormat"] == "json"
     transfer = exported["evidenceTransferPreparation"]
     assert transfer["required"] is True
     assert transfer["packageContainsArtifactContents"] is False
@@ -287,6 +294,404 @@ def test_default_export_and_resume_workflows(tmp_path: Path) -> None:
         "recommendedPrompt": "Verify evidence, then continue.",
     }
     assert "not imported" in resumed["artifactNotice"]
+
+
+def test_milestone_checkpoints_link_findings_to_evidence(
+    tmp_path: Path,
+) -> None:
+    producer = McpProcess(
+        tmp_path / "milestone-producer",
+        {"HANDOFF_TOOL_PROFILE": "cli"},
+    )
+    try:
+        exported = producer.call_tool(
+            "create_handoff_package",
+            {
+                "analysisRecord": {
+                    "summary": "Completed a multi-stage investigation.",
+                    "observations": ["Validated the final implementation."],
+                    "decisions": ["Use structured milestone checkpoints."],
+                    "nextSteps": ["Revalidate evidence after import."],
+                },
+                "evidence": [
+                    {
+                        "id": "evidence-query-result",
+                        "type": "query-result",
+                        "description": "Validated query output",
+                    }
+                ],
+                "artifacts": [
+                    {
+                        "id": "evidence-auth-har",
+                        "path": r"C:\case\authentication.har",
+                        "description": "Authentication network trace",
+                    }
+                ],
+                "milestones": [
+                    {
+                        "title": "Evidence collection",
+                        "phase": "investigation",
+                        "summary": "Collected the authentication evidence.",
+                        "completedWork": ["Captured and reviewed the HAR."],
+                        "findings": [
+                            {
+                                "id": "finding-auth-failure",
+                                "statement": "The callback request was rejected.",
+                                "status": "confirmed",
+                                "confidence": "high",
+                                "evidenceIds": ["evidence-auth-har"],
+                            }
+                        ],
+                    },
+                    {
+                        "title": "Implementation validation",
+                        "phase": "validation",
+                        "summary": "Validated the corrected behavior.",
+                        "completedWork": ["Ran the verification query."],
+                        "findings": [
+                            {
+                                "id": "finding-fix-validated",
+                                "statement": "The corrected flow completed.",
+                                "status": "supported",
+                                "evidenceIds": ["evidence-query-result"],
+                            }
+                        ],
+                    },
+                ],
+            },
+        )
+    finally:
+        producer.close()
+
+    package = json.loads(
+        Path(exported["filePath"]).read_text(encoding="utf-8")
+    )
+    checkpoints = package["content"]["checkpoints"]
+    assert [checkpoint["kind"] for checkpoint in checkpoints] == [
+        "milestone",
+        "milestone",
+        "session-summary",
+    ]
+    assert all(
+        checkpoint["id"].startswith("milestone-")
+        for checkpoint in checkpoints[:2]
+    )
+    assert exported["verification"]["counts"]["milestones"] == 2
+    assert exported["verification"]["counts"]["findings"] == 2
+    assert exported["findingEvidenceMap"] == [
+        {
+            "milestoneId": checkpoints[0]["id"],
+            "milestoneTitle": "Evidence collection",
+            "findingId": "finding-auth-failure",
+            "statement": "The callback request was rejected.",
+            "status": "confirmed",
+            "confidence": "high",
+            "evidenceIds": ["evidence-auth-har"],
+        },
+        {
+            "milestoneId": checkpoints[1]["id"],
+            "milestoneTitle": "Implementation validation",
+            "findingId": "finding-fix-validated",
+            "statement": "The corrected flow completed.",
+            "status": "supported",
+            "evidenceIds": ["evidence-query-result"],
+        },
+    ]
+
+    receiver = McpProcess(
+        tmp_path / "milestone-receiver",
+        {"HANDOFF_TOOL_PROFILE": "cli"},
+    )
+    try:
+        resumed = receiver.call_tool(
+            "continue_from_handoff",
+            {"filePath": exported["filePath"]},
+        )
+    finally:
+        receiver.close()
+
+    assert len(resumed["milestoneCheckpoints"]) == 2
+    assert resumed["findingEvidenceMap"] == exported["findingEvidenceMap"]
+    report = resumed["mandatoryUserReport"]
+    assert "## Milestone checkpoints" in report
+    assert "### Evidence collection" in report
+    assert (
+        "[confirmed] finding-auth-failure: "
+        "The callback request was rejected. "
+        "(evidence: evidence-auth-har)"
+    ) in report
+
+
+def test_rejects_invalid_milestone_evidence_links(tmp_path: Path) -> None:
+    producer = McpProcess(
+        tmp_path / "invalid-milestone-producer",
+        {"HANDOFF_TOOL_PROFILE": "cli"},
+    )
+    try:
+        with pytest.raises(
+            AssertionError,
+            match="undeclared evidence ID",
+        ):
+            producer.call_tool(
+                "create_handoff_package",
+                {
+                    "analysisRecord": {
+                        "summary": "Invalid evidence association.",
+                    },
+                    "milestones": [
+                        {
+                            "title": "Invalid milestone",
+                            "summary": "References missing evidence.",
+                            "findings": [
+                                {
+                                    "id": "finding-missing-evidence",
+                                    "statement": "Unsupported conclusion.",
+                                    "status": "confirmed",
+                                    "evidenceIds": ["missing-evidence"],
+                                }
+                            ],
+                        }
+                    ],
+                },
+            )
+    finally:
+        producer.close()
+
+
+def test_creates_and_continues_portable_handoff_bundle(
+    tmp_path: Path,
+) -> None:
+    session_history = tmp_path / "safe-session-events.json"
+    session_history.write_text(
+        json.dumps(
+            {
+                "schemaVersion": "1.0",
+                "events": [
+                    {
+                        "type": "user.message",
+                        "content": "Investigate the callback failure.",
+                    },
+                    {
+                        "type": "assistant.message",
+                        "content": "The callback was rejected.",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    session_share = tmp_path / "session-share.md"
+    session_share.write_text(
+        "# Shared session\n\nReviewed visible session history.",
+        encoding="utf-8",
+    )
+    evidence_file = tmp_path / "authentication.har"
+    evidence_file.write_text(
+        '{"log":{"entries":[]}}',
+        encoding="utf-8",
+    )
+
+    producer = McpProcess(
+        tmp_path / "bundle-producer",
+        {"HANDOFF_TOOL_PROFILE": "cli"},
+    )
+    try:
+        bundled = producer.call_tool(
+            "create_handoff_bundle",
+            {
+                "analysisRecord": {
+                    "summary": "Investigated the authentication callback.",
+                    "observations": ["Reviewed the safe session export."],
+                    "decisions": ["Transfer a verified portable bundle."],
+                    "nextSteps": ["Revalidate the HAR after import."],
+                },
+                "source": {
+                    "nodeLabel": "Authentication callback investigation",
+                },
+                "milestones": [
+                    {
+                        "title": "Root cause investigation",
+                        "summary": "Validated the callback rejection.",
+                        "findings": [
+                            {
+                                "id": "finding-callback-rejected",
+                                "statement": "The callback request was rejected.",
+                                "status": "confirmed",
+                                "evidenceIds": ["authentication-har"],
+                            }
+                        ],
+                    }
+                ],
+                "sessionHistoryFile": {
+                    "id": "safe-session-history",
+                    "filePath": str(session_history),
+                    "description": "Filtered high-fidelity session events",
+                    "mediaType": "application/json",
+                },
+                "sessionShareFile": {
+                    "id": "session-share",
+                    "filePath": str(session_share),
+                    "description": "Human-readable CLI session share",
+                    "mediaType": "text/markdown",
+                },
+                "evidenceFiles": [
+                    {
+                        "id": "authentication-har",
+                        "filePath": str(evidence_file),
+                        "description": "Authentication network trace",
+                        "mediaType": "application/json",
+                    }
+                ],
+                "includeFileContents": True,
+                "sensitivityReviewConfirmed": True,
+                "destinationDirectory": str(tmp_path / "bundles"),
+            },
+        )
+    finally:
+        producer.close()
+
+    bundle_path = Path(bundled["bundlePath"])
+    assert bundle_path.is_file()
+    assert bundled["packageContainsFileContents"] is True
+    assert bundled["secureTransferRequired"] is True
+    assert bundled["verification"]["valid"] is True
+    assert [entry["role"] for entry in bundled["manifest"]["entries"]] == [
+        "handoff-package",
+        "session-history",
+        "session-share",
+        "evidence",
+    ]
+
+    with zipfile.ZipFile(bundle_path) as archive:
+        names = set(archive.namelist())
+        assert {
+            "manifest.json",
+            "handoff.agent-handoff.json",
+            "checksums.sha256",
+        }.issubset(names)
+        package = json.loads(
+            archive.read("handoff.agent-handoff.json").decode("utf-8")
+        )
+        artifact = next(
+            item
+            for item in package["content"]["artifacts"]
+            if item["id"] == "authentication-har"
+        )
+        assert artifact["uri"].startswith("bundle://evidence/")
+        assert "filePath" not in artifact
+
+    receiver = McpProcess(
+        tmp_path / "bundle-receiver",
+        {"HANDOFF_TOOL_PROFILE": "cli"},
+    )
+    try:
+        resumed = receiver.call_tool(
+            "continue_from_handoff",
+            {
+                "filePath": str(bundle_path),
+            },
+        )
+    finally:
+        receiver.close()
+
+    assert resumed["verification"]["valid"] is True
+    assert resumed["bundlePath"] == str(bundle_path.resolve())
+    assert resumed["sessionName"] == (
+        "Authentication callback investigation (handoff)"
+    )
+    assert len(resumed["bundledFiles"]) == 3
+    assert all(
+        Path(item["extractedPath"]).is_file()
+        for item in resumed["bundledFiles"]
+    )
+    extracted_evidence = next(
+        item
+        for item in resumed["bundledFiles"]
+        if item["id"] == "authentication-har"
+    )
+    assert Path(extracted_evidence["extractedPath"]).read_text(
+        encoding="utf-8"
+    ) == evidence_file.read_text(encoding="utf-8")
+    assert "## Bundled session and evidence files" in (
+        resumed["mandatoryUserReport"]
+    )
+    assert resumed["findingEvidenceMap"][0]["evidenceIds"] == [
+        "authentication-har"
+    ]
+
+
+def test_rejects_tampered_handoff_bundle(tmp_path: Path) -> None:
+    evidence_file = tmp_path / "evidence.log"
+    evidence_file.write_text("original evidence", encoding="utf-8")
+    producer = McpProcess(
+        tmp_path / "tamper-producer",
+        {"HANDOFF_TOOL_PROFILE": "cli"},
+    )
+    try:
+        bundled = producer.call_tool(
+            "create_handoff_bundle",
+            {
+                "analysisRecord": {"summary": "Bundle tamper test."},
+                "evidenceFiles": [
+                    {
+                        "id": "evidence-log",
+                        "filePath": str(evidence_file),
+                    }
+                ],
+                "includeFileContents": True,
+                "sensitivityReviewConfirmed": True,
+                "destinationDirectory": str(tmp_path / "tamper-bundles"),
+            },
+        )
+    finally:
+        producer.close()
+
+    source_bundle = Path(bundled["bundlePath"])
+    tampered_bundle = tmp_path / "tampered.handoff-bundle.zip"
+    with zipfile.ZipFile(source_bundle) as source:
+        entries = {
+            name: source.read(name)
+            for name in source.namelist()
+        }
+    evidence_name = next(
+        name for name in entries if name.startswith("evidence/")
+    )
+    entries[evidence_name] = b"tampered evidence"
+    with zipfile.ZipFile(tampered_bundle, "w") as target:
+        for name, content in entries.items():
+            target.writestr(name, content)
+
+    receiver = McpProcess(
+        tmp_path / "tamper-receiver",
+        {"HANDOFF_TOOL_PROFILE": "cli"},
+    )
+    try:
+        with pytest.raises(AssertionError, match="hash mismatch"):
+            receiver.call_tool(
+                "continue_from_handoff",
+                {"filePath": str(tampered_bundle)},
+            )
+    finally:
+        receiver.close()
+
+
+def test_rejects_unsafe_handoff_bundle_path(tmp_path: Path) -> None:
+    unsafe_bundle = tmp_path / "unsafe.handoff-bundle.zip"
+    with zipfile.ZipFile(unsafe_bundle, "w") as archive:
+        archive.writestr("../escape.txt", "unsafe")
+
+    receiver = McpProcess(
+        tmp_path / "unsafe-bundle-receiver",
+        {"HANDOFF_TOOL_PROFILE": "cli"},
+    )
+    try:
+        with pytest.raises(AssertionError, match="unsafe path"):
+            receiver.call_tool(
+                "continue_from_handoff",
+                {"filePath": str(unsafe_bundle)},
+            )
+    finally:
+        receiver.close()
 
 
 def test_atomic_export_lists_original_evidence_without_exporting_it(

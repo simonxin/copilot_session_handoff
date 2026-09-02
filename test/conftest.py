@@ -18,6 +18,7 @@ EXPECTED_TOOLS = {
     "create_handoff",
     "create_handoff_session",
     "export_handoff",
+    "create_handoff_bundle",
     "create_handoff_package",
     "get_handoff",
     "import_handoff",
@@ -26,6 +27,7 @@ EXPECTED_TOOLS = {
     "list_handoffs",
     "revoke_handoff",
     "continue_from_handoff",
+    "continue_from_handoff_bundle",
     "verify_handoff",
     "verify_handoff_file",
 }

@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { z } from 'zod'
 
 const builtInExportDefaults = {
+  format: 'bundle' as const,
   platform: 'github-copilot-cli',
   workflowId: 'copilot-cli-session-handoff-test',
   workflowRevision: 1,
@@ -20,6 +21,8 @@ const builtInImportDefaults = {
 
 const workflowDefaultsSchema = z.object({
   export: z.object({
+    format: z.enum(['bundle', 'json'])
+      .default(builtInExportDefaults.format),
     platform: z.string().min(1).default(builtInExportDefaults.platform),
     workflowId: z.string().min(1)
       .default(builtInExportDefaults.workflowId),

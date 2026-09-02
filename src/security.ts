@@ -3,6 +3,7 @@ import {
   portableHandoffPackageSchema,
   type PortableHandoffPackage,
 } from './contract.js'
+import { validateMilestoneEvidenceLinks } from './checkpoint.js'
 
 const sensitiveKey = /^(authorization|credentials?|password|secret|token|api[-_]?key|client[-_]?secret|private[-_]?key|cookie|(api|access|refresh|auth|bearer)[-_]?token)$/i
 const bearerValue = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi
@@ -22,6 +23,8 @@ export interface VerificationReport {
     toolExecutions: number
     evidence: number
     artifacts: number
+    milestones: number
+    findings: number
   }
 }
 
@@ -73,12 +76,15 @@ export function verifyPackage(value: unknown): {
     : false
   const errors: string[] = []
   const warnings: string[] = []
+  const milestoneValidation = validateMilestoneEvidenceLinks(packageValue)
 
   if (!integrityValid) errors.push('Handoff package integrity validation failed.')
   if (sensitivePath) {
     errors.push(`Handoff package contains sensitive data at "${sensitivePath}".`)
   }
   if (expired) errors.push('Handoff package has expired.')
+  errors.push(...milestoneValidation.errors)
+  warnings.push(...milestoneValidation.warnings)
 
   const content = packageValue.content
   if (
@@ -99,7 +105,11 @@ export function verifyPackage(value: unknown): {
   return {
     package: packageValue,
     report: {
-      valid: integrityValid && !sensitivePath && !expired,
+      valid:
+        integrityValid
+        && !sensitivePath
+        && !expired
+        && milestoneValidation.errors.length === 0,
       schemaValid: true,
       integrityValid,
       secretsAbsent: !sensitivePath,
@@ -113,6 +123,8 @@ export function verifyPackage(value: unknown): {
         toolExecutions: content.toolExecutions.length,
         evidence: content.evidence.length,
         artifacts: content.artifacts.length,
+        milestones: milestoneValidation.milestones.length,
+        findings: milestoneValidation.findingEvidenceMap.length,
       },
     },
   }

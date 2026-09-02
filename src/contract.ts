@@ -50,6 +50,38 @@ export const handoffSessionSummaryCheckpointSchema = z.object({
   objective: z.string(),
 }).strict()
 
+export const handoffFindingSchema = z.object({
+  id: z.string().min(1),
+  statement: z.string().min(1),
+  status: z.enum([
+    'confirmed',
+    'supported',
+    'hypothesis',
+    'unverified',
+    'disproven',
+  ]).default('unverified'),
+  confidence: z.string().optional(),
+  evidenceIds: z.array(z.string().min(1)).default([]),
+}).strict()
+
+export const handoffMilestoneCheckpointInputSchema = z.object({
+  title: z.string().min(1),
+  phase: z.string().min(1).optional(),
+  summary: z.string().min(1),
+  completedWork: z.array(z.unknown()).default([]),
+  decisions: z.array(z.unknown()).default([]),
+  openQuestions: z.array(z.unknown()).default([]),
+  nextSteps: z.array(z.unknown()).default([]),
+  findings: z.array(handoffFindingSchema).default([]),
+}).strict()
+
+export const handoffMilestoneCheckpointSchema =
+  handoffMilestoneCheckpointInputSchema.extend({
+    kind: z.literal('milestone'),
+    id: z.string().min(1),
+    timestamp: z.string(),
+  }).strict()
+
 export const handoffContentSchema = z.object({
   analysisRecord: handoffAnalysisRecordSchema,
   messages: z.array(handoffMessageSchema).default([]),
@@ -124,6 +156,13 @@ export type HandoffContent = z.infer<typeof handoffContentSchema>
 export type HandoffSecurity = z.infer<typeof handoffSecuritySchema>
 export type HandoffSessionSummaryCheckpoint = z.infer<
   typeof handoffSessionSummaryCheckpointSchema
+>
+export type HandoffFinding = z.infer<typeof handoffFindingSchema>
+export type HandoffMilestoneCheckpointInput = z.infer<
+  typeof handoffMilestoneCheckpointInputSchema
+>
+export type HandoffMilestoneCheckpoint = z.infer<
+  typeof handoffMilestoneCheckpointSchema
 >
 export type HandoffSource = z.infer<typeof handoffSourceSchema>
 export type HandoffTargetSession = z.infer<typeof handoffTargetSessionSchema>

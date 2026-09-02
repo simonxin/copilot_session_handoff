@@ -5,16 +5,31 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import {
+  bundleArtifactReferences,
+  bundleSourceFileSchema,
+  createHandoffBundle,
+  extractVerifiedHandoffBundle,
+  isZipArchive,
+  prepareBundleFiles,
+  verifyHandoffBundle,
+  type ExtractedBundle,
+  type HandoffBundleManifest,
+} from './bundle.js'
+import {
   actorReferenceSchema,
   handoffAnalysisRecordSchema,
   handoffContentSchema,
+  handoffMilestoneCheckpointInputSchema,
   handoffSecuritySchema,
   handoffSourceSchema,
+  type PortableHandoffRecord,
 } from './contract.js'
 import { HandoffStore } from './store.js'
 import {
+  formatMilestoneCheckpoints,
   formatCheckpoint,
   latestSessionSummaryCheckpoint,
+  validateMilestoneEvidenceLinks,
 } from './checkpoint.js'
 import { loadWorkflowDefaults } from './defaults.js'
 
@@ -34,9 +49,37 @@ const workflowDefaults = await loadWorkflowDefaults(
 const store = new HandoffStore(storeRoot, actor, trustedGateway)
 await store.initialize()
 
+const createHandoffPackageInputSchema = z.object({
+  analysisRecord: handoffAnalysisRecordSchema,
+  runId: z.string().min(1).optional(),
+  source: handoffSourceSchema.partial().optional(),
+  messages: handoffContentSchema.shape.messages.optional(),
+  stateSnapshot: handoffContentSchema.shape.stateSnapshot.optional(),
+  nodeState: handoffContentSchema.shape.nodeState.optional(),
+  events: handoffContentSchema.shape.events.optional(),
+  checkpoints: handoffContentSchema.shape.checkpoints.optional(),
+  milestones: z.array(handoffMilestoneCheckpointInputSchema).optional(),
+  toolExecutions: handoffContentSchema.shape.toolExecutions.optional(),
+  evidence: handoffContentSchema.shape.evidence.optional(),
+  artifacts: handoffContentSchema.shape.artifacts.optional(),
+  resumeInstructions:
+    handoffContentSchema.shape.resumeInstructions.optional(),
+  security: handoffSecuritySchema.optional(),
+  destinationDirectory: z.string().min(1).optional(),
+  overwrite: z.boolean().default(false),
+}).strict()
+
+const createHandoffBundleInputSchema = createHandoffPackageInputSchema.extend({
+  sessionHistoryFile: bundleSourceFileSchema.optional(),
+  sessionShareFile: bundleSourceFileSchema.optional(),
+  evidenceFiles: z.array(bundleSourceFileSchema).default([]),
+  includeFileContents: z.literal(true),
+  sensitivityReviewConfirmed: z.literal(true),
+}).strict()
+
 const server = new McpServer({
   name: 'copilot-session-handoff',
-  version: '0.1.0',
+  version: '0.2.0',
 })
 
 if (toolEnabled('create_handoff')) server.registerTool('create_handoff', {
@@ -45,12 +88,14 @@ if (toolEnabled('create_handoff')) server.registerTool('create_handoff', {
   inputSchema: {
     source: handoffSourceSchema,
     content: handoffContentSchema,
+    milestones: z.array(handoffMilestoneCheckpointInputSchema).optional(),
     security: handoffSecuritySchema.optional(),
   },
-}, async ({ source, content, security }) => {
+}, async ({ source, content, milestones, security }) => {
   const handoff = await store.create({
     source,
     content,
+    ...(milestones ? { milestones } : {}),
     ...(security ? { security } : {}),
   })
   return handoffResult(handoff, { actor, trustedGateway })
@@ -58,93 +103,69 @@ if (toolEnabled('create_handoff')) server.registerTool('create_handoff', {
 
 if (toolEnabled('create_handoff_package')) server.registerTool('create_handoff_package', {
   description:
-    'Default Copilot CLI export workflow. First checkpoint and summarize the current explicit session context in analysisRecord. Include every original evidence file needed by the receiving engineer in artifacts. This tool creates, verifies, and exports only the handoff package. It does not export artifact files. The response prominently lists each original evidence location under originalEvidenceRequired; always show that list to the engineer so they can prepare a separate approved secure transfer. Never include credentials, tokens, cookies, personal data, hidden reasoning, or provider-private state. Supply the current stable session ID as runId when available; otherwise the configured fallback is used.',
-  inputSchema: {
-    analysisRecord: handoffAnalysisRecordSchema,
-    runId: z.string().min(1).optional(),
-    source: handoffSourceSchema.partial().optional(),
-    messages: handoffContentSchema.shape.messages.optional(),
-    stateSnapshot: handoffContentSchema.shape.stateSnapshot.optional(),
-    nodeState: handoffContentSchema.shape.nodeState.optional(),
-    events: handoffContentSchema.shape.events.optional(),
-    checkpoints: handoffContentSchema.shape.checkpoints.optional(),
-    toolExecutions: handoffContentSchema.shape.toolExecutions.optional(),
-    evidence: handoffContentSchema.shape.evidence.optional(),
-    artifacts: handoffContentSchema.shape.artifacts.optional(),
-    resumeInstructions:
-      handoffContentSchema.shape.resumeInstructions.optional(),
-    security: handoffSecuritySchema.optional(),
-    destinationDirectory: z.string().min(1).optional(),
-    overwrite: z.boolean().default(false),
-  },
-}, async ({
-  analysisRecord,
-  runId,
-  source,
-  messages,
-  stateSnapshot,
-  nodeState,
-  events,
-  checkpoints,
-  toolExecutions,
-  evidence,
-  artifacts,
-  resumeInstructions,
-  security,
-  destinationDirectory,
-  overwrite,
-}) => {
-  const resolvedSource = handoffSourceSchema.parse({
-    platform: source?.platform ?? workflowDefaults.export.platform,
-    workflowId: source?.workflowId ?? workflowDefaults.export.workflowId,
-    workflowRevision:
-      source?.workflowRevision ?? workflowDefaults.export.workflowRevision,
-    runId:
-      runId
-      ?? source?.runId
-      ?? process.env.HANDOFF_SESSION_ID
-      ?? workflowDefaults.export.fallbackRunId,
-    nodeId: source?.nodeId ?? workflowDefaults.export.nodeId,
-    ...(source?.nodeLabel ? { nodeLabel: source.nodeLabel } : {}),
-    ...(source?.agent ? { agent: source.agent } : {}),
-    ...(source?.definitionHash
-      ? { definitionHash: source.definitionHash }
-      : {}),
-  })
-  const handoff = await store.create({
-    source: resolvedSource,
-    content: handoffContentSchema.parse({
-      analysisRecord,
-      messages: messages ?? [],
-      stateSnapshot: stateSnapshot ?? {},
-      nodeState: nodeState ?? {},
-      events: events ?? [],
-      checkpoints: checkpoints ?? [],
-      toolExecutions: toolExecutions ?? [],
-      evidence: evidence ?? [],
-      artifacts: artifacts ?? [],
-      resumeInstructions: resumeInstructions ?? {
-        objective: workflowDefaults.export.resumeObjective,
-        recommendedPrompt: workflowDefaults.export.recommendedPrompt,
-      },
-    }),
-    ...(security ? { security } : {}),
-  })
-  const verification = await store.verify(handoff.package)
-  if (!verification.valid) {
-    throw new Error(
-      `Created handoff failed verification: ${verification.errors.join(' ')}`,
-    )
-  }
+    'Fallback metadata-only JSON export. Use this only when a ZIP cannot be transferred or the user does not authorize file contents. The default Copilot CLI export is create_handoff_bundle.',
+  inputSchema: createHandoffPackageInputSchema.shape,
+}, async (input) => {
+  const { handoff, verification } = await createWorkflowHandoff(input)
   const filePath = await store.export(
     handoff.package.handoffId,
-    destinationDirectory
+    input.destinationDirectory
       ?? workflowDefaults.export.destinationDirectory
       ?? store.exportDirectory,
-    overwrite,
+    input.overwrite,
   )
   return exportResult(handoff, filePath, verification, {
     handoffId: handoff.package.handoffId,
+    exportFormat: 'json',
+    defaultsUsed: workflowDefaults.export,
+    actor,
+  })
+})
+
+if (toolEnabled('create_handoff_bundle')) server.registerTool('create_handoff_bundle', {
+  description:
+    'PRIMARY/default Copilot CLI export. Create a portable ZIP containing the structured handoff package plus explicitly selected high-fidelity session, CLI share, and evidence files. File contents are copied only when includeFileContents and sensitivityReviewConfirmed are true. Source files must be regular non-symlink files and are limited to 100 MiB each and 250 MiB total. The ZIP is not encrypted and must still be transferred through an approved secure channel.',
+  inputSchema: createHandoffBundleInputSchema.shape,
+}, async (input) => {
+  const selectedFiles = await prepareBundleFiles([
+    ...(input.sessionHistoryFile
+      ? [{ ...input.sessionHistoryFile, role: 'session-history' as const }]
+      : []),
+    ...(input.sessionShareFile
+      ? [{ ...input.sessionShareFile, role: 'session-share' as const }]
+      : []),
+    ...input.evidenceFiles.map((file) => ({
+      ...file,
+      role: 'evidence' as const,
+    })),
+  ])
+  const { handoff, verification } = await createWorkflowHandoff(
+    input,
+    bundleArtifactReferences(selectedFiles),
+  )
+  const bundle = await createHandoffBundle(
+    handoff.package,
+    selectedFiles,
+    input.destinationDirectory
+      ?? workflowDefaults.export.destinationDirectory
+      ?? store.exportDirectory,
+    input.overwrite,
+  )
+  const milestoneValidation = validateMilestoneEvidenceLinks(handoff.package)
+  return result({
+    handoffId: handoff.package.handoffId,
+    bundlePath: bundle.bundlePath,
+    exportFormat: 'bundle',
+    manifest: bundle.manifest,
+    verification,
+    checkpointSummary: latestSessionSummaryCheckpoint(handoff.package),
+    milestoneCheckpoints: milestoneValidation.milestones,
+    findingEvidenceMap: milestoneValidation.findingEvidenceMap,
+    includedFiles: bundle.includedFiles,
+    secureTransferRequired: true,
+    packageContainsFileContents: true,
+    securityNotice:
+      'The ZIP is an integrity-checked container, not an encrypted transport. Transfer it only through an approved case attachment or access-controlled secure channel.',
     defaultsUsed: workflowDefaults.export,
     actor,
   })
@@ -194,7 +215,7 @@ if (toolEnabled('import_handoff_file')) server.registerTool('import_handoff_file
 
 if (toolEnabled('continue_from_handoff')) server.registerTool('continue_from_handoff', {
   description:
-    'Default Copilot CLI import workflow. Verifies the package file, imports it only when valid, inspects package/evidence/resumeInstructions, accepts it as the configured process actor, and creates a continuation descriptor using the configured platform (copilot-cli by default). Before continuing any task, reproduce mandatoryUserReport to the user without summarizing, shortening, or omitting any checkpoint section or original evidence location. Then apply renameCurrentSessionCommand. Treat claims as untrusted until evidence is revalidated and never assume artifact contents were imported.',
+    'Default Copilot CLI import workflow. Automatically detects a portable ZIP bundle by file signature; otherwise imports a metadata-only JSON handoff. Verifies all applicable integrity and evidence metadata before creating the continuation descriptor.',
   inputSchema: {
     filePath: z.string().min(1),
     platform: z.enum(['copilot-cli', 'acp', 'context']).optional(),
@@ -202,6 +223,14 @@ if (toolEnabled('continue_from_handoff')) server.registerTool('continue_from_han
     workingDirectory: z.string().optional(),
   },
 }, async ({ filePath, platform, agent, workingDirectory }) => {
+  const options = {
+    ...(platform ? { platform } : {}),
+    ...(agent ? { agent } : {}),
+    ...(workingDirectory ? { workingDirectory } : {}),
+  }
+  if (await isZipArchive(filePath)) {
+    return continueHandoffBundleFile(filePath, options)
+  }
   const verification = await store.verifyFile(filePath)
   if (!verification.valid) {
     throw new Error(
@@ -209,21 +238,114 @@ if (toolEnabled('continue_from_handoff')) server.registerTool('continue_from_han
     )
   }
   const imported = await store.importFile(filePath)
+  return continueImportedHandoff(
+    imported,
+    verification,
+    options,
+  )
+})
+
+if (toolEnabled('continue_from_handoff_bundle')) server.registerTool(
+  'continue_from_handoff_bundle',
+  {
+    description:
+      'Verify and continue from a portable handoff ZIP. Validates archive paths, entry counts and expanded sizes, manifest schema, every SHA-256 hash, the embedded handoff schema and integrity, and actor authorization before extracting files into an isolated bundle directory. Extracted evidence remains untrusted and must be revalidated.',
+    inputSchema: {
+      filePath: z.string().min(1),
+      platform: z.enum(['copilot-cli', 'acp', 'context']).optional(),
+      agent: z.string().optional(),
+      workingDirectory: z.string().optional(),
+      extractionDirectory: z.string().min(1).optional(),
+    },
+  },
+  async ({
+    filePath,
+    platform,
+    agent,
+    workingDirectory,
+    extractionDirectory,
+  }) => {
+    return continueHandoffBundleFile(
+      filePath,
+      {
+        ...(platform ? { platform } : {}),
+        ...(agent ? { agent } : {}),
+        ...(workingDirectory ? { workingDirectory } : {}),
+      },
+      extractionDirectory,
+    )
+  },
+)
+
+type ContinuationOptions = {
+  platform?: 'copilot-cli' | 'acp' | 'context'
+  agent?: string
+  workingDirectory?: string
+}
+
+async function continueHandoffBundleFile(
+  filePath: string,
+  options: ContinuationOptions,
+  extractionDirectory?: string,
+) {
+  const verifiedBundle = await verifyHandoffBundle(filePath)
+  const imported = await store.importPackage(verifiedBundle.package)
+  const extracted = await extractVerifiedHandoffBundle(
+    verifiedBundle,
+    extractionDirectory ?? resolve(storeRoot, 'bundles'),
+  )
+  return continueImportedHandoff(
+    imported,
+    await store.verify(imported.package),
+    options,
+    {
+      manifest: verifiedBundle.manifest,
+      extracted,
+      bundlePath: verifiedBundle.bundlePath,
+    },
+  )
+}
+
+async function continueImportedHandoff(
+  imported: PortableHandoffRecord,
+  verification: Awaited<ReturnType<HandoffStore['verify']>>,
+  options: ContinuationOptions,
+  bundle?: {
+    manifest: HandoffBundleManifest
+    extracted: ExtractedBundle
+    bundlePath: string
+  },
+) {
   const checkpointSummary = latestSessionSummaryCheckpoint(imported.package)
+  const milestoneValidation = validateMilestoneEvidenceLinks(imported.package)
   const inspection = {
     source: imported.package.source,
     evidence: imported.package.content.evidence,
     artifacts: imported.package.content.artifacts,
     resumeInstructions: imported.package.content.resumeInstructions,
     verification: await store.verify(imported.package),
+    milestoneCheckpoints: milestoneValidation.milestones,
+    findingEvidenceMap: milestoneValidation.findingEvidenceMap,
+    ...(bundle
+      ? {
+          bundle: {
+            bundlePath: bundle.bundlePath,
+            extractionDirectory: bundle.extracted.directory,
+            manifest: bundle.manifest,
+            files: bundle.extracted.files,
+          },
+        }
+      : {}),
   }
   const accepted = await store.accept(imported.package.handoffId)
   const handoff = await store.createContinuation(
     accepted.package.handoffId,
     {
-      platform: platform ?? workflowDefaults.import.platform,
-      ...(agent ? { agent } : {}),
-      ...(workingDirectory ? { workingDirectory } : {}),
+      platform: options.platform ?? workflowDefaults.import.platform,
+      ...(options.agent ? { agent: options.agent } : {}),
+      ...(options.workingDirectory
+        ? { workingDirectory: options.workingDirectory }
+        : {}),
     },
   )
   const continuation = handoff.targetSessions.at(-1)
@@ -231,25 +353,45 @@ if (toolEnabled('continue_from_handoff')) server.registerTool('continue_from_han
     throw new Error('Continuation descriptor was not created.')
   }
   const renameCurrentSessionCommand = `/rename ${continuation.sessionName}`
-  const artifactNotice =
-    'Artifact references were not imported or dereferenced. Re-authorize and verify each artifact with the current user credential.'
-  const evidencePreparation =
-    evidenceTransferPreparation(handoff.package)
-  const originalEvidenceRequired = evidencePreparation.files.map((file) => ({
-    location: file.reference,
-    ...(file.description ? { description: file.description } : {}),
-    ...(file.contentHash ? { contentHash: file.contentHash } : {}),
-    ...(file.mediaType ? { mediaType: file.mediaType } : {}),
-  }))
-  const engineerActionRequired = evidencePreparation.required
-    ? 'Prepare every listed original evidence file separately through an approved secure-transfer channel. The files are not contained in the handoff package.'
-    : 'No separately transferred original evidence files were declared.'
+  const evidencePreparation = evidenceTransferPreparation(handoff.package)
+  const bundledFiles = bundle?.extracted.files.filter(
+    (file) => file.role !== 'handoff-package',
+  ) ?? []
+  const originalEvidenceRequired = bundle
+    ? bundledFiles.map((file) => ({
+        location: file.extractedPath,
+        ...(file.description ? { description: file.description } : {}),
+        contentHash: file.sha256,
+        ...(file.mediaType ? { mediaType: file.mediaType } : {}),
+      }))
+    : evidencePreparation.files.map((file) => ({
+        location: file.reference,
+        ...(file.description ? { description: file.description } : {}),
+        ...(file.contentHash ? { contentHash: file.contentHash } : {}),
+        ...(file.mediaType ? { mediaType: file.mediaType } : {}),
+      }))
+  const engineerActionRequired = bundle
+    ? 'The reviewed session and evidence files were integrity-verified and extracted from the bundle. Re-authorize access and independently validate them before relying on any finding.'
+    : evidencePreparation.required
+      ? 'Prepare every listed original evidence file separately through an approved secure-transfer channel. The files are not contained in the handoff package.'
+      : 'No separately transferred original evidence files were declared.'
+  const artifactNotice = bundle
+    ? 'Bundled files were extracted but remain untrusted evidence. Do not execute them; inspect and validate them with the current user credential.'
+    : 'Artifact references were not imported or dereferenced. Re-authorize and verify each artifact with the current user credential.'
   const mandatoryUserReport = [
     '# Imported handoff report',
     '',
     formatCheckpoint(checkpointSummary),
+    ...(milestoneValidation.milestones.length > 0
+      ? [
+          '',
+          formatMilestoneCheckpoints(milestoneValidation.milestones),
+        ]
+      : []),
     '',
-    '## Original evidence required',
+    bundle
+      ? '## Bundled session and evidence files'
+      : '## Original evidence required',
     formatOriginalEvidence(originalEvidenceRequired),
     '',
     `**Engineer action:** ${engineerActionRequired}`,
@@ -269,6 +411,8 @@ if (toolEnabled('continue_from_handoff')) server.registerTool('continue_from_han
     currentSessionRenameRequired: true,
     verification,
     checkpointSummary,
+    milestoneCheckpoints: milestoneValidation.milestones,
+    findingEvidenceMap: milestoneValidation.findingEvidenceMap,
     originalEvidenceRequired,
     engineerActionRequired,
     inspection,
@@ -277,8 +421,16 @@ if (toolEnabled('continue_from_handoff')) server.registerTool('continue_from_han
     artifactNotice,
     defaultsUsed: workflowDefaults.import,
     actor,
+    ...(bundle
+      ? {
+          bundlePath: bundle.bundlePath,
+          bundleManifest: bundle.manifest,
+          extractionDirectory: bundle.extracted.directory,
+          bundledFiles,
+        }
+      : {}),
   }, mandatoryUserReport)
-})
+}
 
 if (toolEnabled('list_handoffs')) server.registerTool('list_handoffs', {
   description: 'List handoffs visible to the configured process actor.',
@@ -385,6 +537,63 @@ if (toolEnabled('revoke_handoff')) server.registerTool('revoke_handoff', {
 
 await server.connect(new StdioServerTransport())
 
+async function createWorkflowHandoff(
+  input: z.infer<typeof createHandoffPackageInputSchema>,
+  additionalArtifacts: Array<Record<string, unknown>> = [],
+) {
+  const resolvedSource = handoffSourceSchema.parse({
+    platform: input.source?.platform ?? workflowDefaults.export.platform,
+    workflowId:
+      input.source?.workflowId ?? workflowDefaults.export.workflowId,
+    workflowRevision:
+      input.source?.workflowRevision
+      ?? workflowDefaults.export.workflowRevision,
+    runId:
+      input.runId
+      ?? input.source?.runId
+      ?? process.env.HANDOFF_SESSION_ID
+      ?? workflowDefaults.export.fallbackRunId,
+    nodeId: input.source?.nodeId ?? workflowDefaults.export.nodeId,
+    ...(input.source?.nodeLabel
+      ? { nodeLabel: input.source.nodeLabel }
+      : {}),
+    ...(input.source?.agent ? { agent: input.source.agent } : {}),
+    ...(input.source?.definitionHash
+      ? { definitionHash: input.source.definitionHash }
+      : {}),
+  })
+  const handoff = await store.create({
+    source: resolvedSource,
+    content: handoffContentSchema.parse({
+      analysisRecord: input.analysisRecord,
+      messages: input.messages ?? [],
+      stateSnapshot: input.stateSnapshot ?? {},
+      nodeState: input.nodeState ?? {},
+      events: input.events ?? [],
+      checkpoints: input.checkpoints ?? [],
+      toolExecutions: input.toolExecutions ?? [],
+      evidence: input.evidence ?? [],
+      artifacts: [
+        ...(input.artifacts ?? []),
+        ...additionalArtifacts,
+      ],
+      resumeInstructions: input.resumeInstructions ?? {
+        objective: workflowDefaults.export.resumeObjective,
+        recommendedPrompt: workflowDefaults.export.recommendedPrompt,
+      },
+    }),
+    ...(input.milestones ? { milestones: input.milestones } : {}),
+    ...(input.security ? { security: input.security } : {}),
+  })
+  const verification = await store.verify(handoff.package)
+  if (!verification.valid) {
+    throw new Error(
+      `Created handoff failed verification: ${verification.errors.join(' ')}`,
+    )
+  }
+  return { handoff, verification }
+}
+
 function result(value: Record<string, unknown>) {
   return {
     content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }],
@@ -406,9 +615,12 @@ function handoffResult(
   handoff: Awaited<ReturnType<HandoffStore['get']>>,
   extra: Record<string, unknown> = {},
 ) {
+  const milestoneValidation = validateMilestoneEvidenceLinks(handoff.package)
   return result({
     handoff,
     checkpointSummary: latestSessionSummaryCheckpoint(handoff.package),
+    milestoneCheckpoints: milestoneValidation.milestones,
+    findingEvidenceMap: milestoneValidation.findingEvidenceMap,
     ...extra,
   })
 }
@@ -475,11 +687,14 @@ function exportResult(
   const engineerActionRequired = preparation.required
     ? 'Prepare the listed original evidence files separately through an approved secure-transfer channel. The files are not contained in the handoff package.'
     : 'No separately transferred original evidence files were declared.'
+  const milestoneValidation = validateMilestoneEvidenceLinks(handoff.package)
   return result({
     handoffId: handoff.package.handoffId,
     filePath,
     verification,
     checkpointSummary: latestSessionSummaryCheckpoint(handoff.package),
+    milestoneCheckpoints: milestoneValidation.milestones,
+    findingEvidenceMap: milestoneValidation.findingEvidenceMap,
     engineerActionRequired,
     originalEvidenceRequired,
     evidenceTransferPreparation: preparation,
@@ -509,6 +724,7 @@ function toolEnabled(toolName: string): boolean {
   if (toolProfile === 'cli') {
     return [
       'create_handoff_package',
+      'create_handoff_bundle',
       'continue_from_handoff',
     ].includes(toolName)
   }

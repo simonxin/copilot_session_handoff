@@ -11,11 +11,13 @@ import {
 import { basename, join, resolve } from 'node:path'
 import {
   handoffContentSchema,
+  handoffMilestoneCheckpointInputSchema,
   handoffSecuritySchema,
   handoffSourceSchema,
   portableHandoffRecordSchema,
   type ActorReference,
   type HandoffContent,
+  type HandoffMilestoneCheckpointInput,
   type HandoffSecurity,
   type HandoffSource,
   type PortableHandoffPackage,
@@ -29,14 +31,18 @@ import {
 } from './security.js'
 import {
   continuationSessionName,
+  createMilestoneCheckpoints,
   createSessionSummaryCheckpoint,
   formatCheckpoint,
+  formatMilestoneCheckpoints,
   latestSessionSummaryCheckpoint,
+  validateMilestoneEvidenceLinks,
 } from './checkpoint.js'
 
 export interface CreateHandoffInput {
   source: HandoffSource
   content: HandoffContent
+  milestones?: HandoffMilestoneCheckpointInput[]
   security?: HandoffSecurity
 }
 
@@ -66,10 +72,18 @@ export class HandoffStore {
   async create(input: CreateHandoffInput): Promise<PortableHandoffRecord> {
     const createdAt = now()
     const parsedContent = handoffContentSchema.parse(redactValue(input.content))
+    const parsedMilestones = handoffMilestoneCheckpointInputSchema.array().parse(
+      redactValue(input.milestones ?? []),
+    )
+    const milestones = createMilestoneCheckpoints(
+      parsedMilestones,
+      createdAt,
+    )
     const content = handoffContentSchema.parse({
       ...parsedContent,
       checkpoints: [
         ...parsedContent.checkpoints,
+        ...milestones,
         createSessionSummaryCheckpoint(
           parsedContent.analysisRecord,
           parsedContent.resumeInstructions.objective,
@@ -90,6 +104,12 @@ export class HandoffStore {
         redactionStatus: 'secrets-redacted',
       },
     })
+    const verification = verifyPackage(packageValue).report
+    if (!verification.valid) {
+      throw new Error(
+        `Created handoff failed verification: ${verification.errors.join(' ')}`,
+      )
+    }
     const record: PortableHandoffRecord = {
       package: packageValue,
       status: 'offered',
@@ -399,6 +419,7 @@ function continuationPrompt(
   packagePath: string,
 ): string {
   const checkpoint = latestSessionSummaryCheckpoint(packageValue)
+  const milestones = validateMilestoneEvidenceLinks(packageValue).milestones
   return [
     'Continue work from a portable Agency Flow handoff.',
     '',
@@ -412,6 +433,9 @@ function continuationPrompt(
     '',
     'Checkpoint from the previous session:',
     formatCheckpoint(checkpoint),
+    ...(milestones.length > 0
+      ? ['', formatMilestoneCheckpoints(milestones)]
+      : []),
     '',
     'Report evidence that cannot be accessed with the current user credential.',
   ].join('\n')

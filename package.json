@@ -1,6 +1,6 @@
 {
   "name": "copilot-session-handoff-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Standalone MCP server for portable Agency Flow session handoffs.",
   "type": "module",
   "private": true,
@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "fflate": "^0.8.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {

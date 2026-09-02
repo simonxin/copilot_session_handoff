@@ -132,11 +132,13 @@ the server profile performs the filtering before tool discovery.
 |---|---|
 | `create_handoff` | Create, redact, hash, and persist a v1 package |
 | `create_handoff_package` | Default create, checkpoint, verify, and export workflow |
+| `create_handoff_bundle` | Create a ZIP with the handoff plus reviewed session and evidence files |
 | `verify_handoff` | Validate a package without storing it |
 | `verify_handoff_file` | Validate a local JSON package |
 | `import_handoff` | Verify and import a package object |
 | `import_handoff_file` | Verify and import a package file |
 | `continue_from_handoff` | Default verify, import, inspect, accept, and continue workflow |
+| `continue_from_handoff_bundle` | Verify, extract, import, and continue from a ZIP bundle |
 | `list_handoffs` | List records visible to the process actor |
 | `get_handoff` | Read an authorized record |
 | `inspect_handoff` | Read and generate a fresh verification report |
@@ -153,21 +155,78 @@ without relying on provider-private session state. Older v1 packages without
 this checkpoint remain compatible and derive the display summary from their
 `analysisRecord`.
 
+Long sessions can also supply `milestones` to `create_handoff` or
+`create_handoff_package`. The MCP assigns each milestone a stable ID and
+timestamp, stores the milestones before the final `session-summary`, and
+returns both `milestoneCheckpoints` and `findingEvidenceMap`.
+
+Each milestone can contain structured findings. A finding associates its
+conclusion with stable IDs declared on `content.evidence` or `artifacts`:
+
+```json
+{
+  "evidence": [
+    {
+      "id": "evidence-query-result",
+      "description": "Validated query output"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "evidence-auth-har",
+      "path": "C:\\case\\authentication.har"
+    }
+  ],
+  "milestones": [
+    {
+      "title": "Evidence collection",
+      "phase": "investigation",
+      "summary": "Collected and reviewed the authentication evidence.",
+      "findings": [
+        {
+          "id": "finding-auth-failure",
+          "statement": "The callback request was rejected.",
+          "status": "confirmed",
+          "confidence": "high",
+          "evidenceIds": ["evidence-auth-har"]
+        }
+      ]
+    }
+  ]
+}
+```
+
+`confirmed` and `supported` findings must reference at least one declared
+evidence ID. Duplicate evidence IDs, duplicate finding IDs, duplicate links,
+and undeclared evidence references make verification fail. `hypothesis` and
+`unverified` findings may omit evidence, but verification reports a warning.
+The import report includes a compact milestone timeline showing every finding
+and its evidence IDs; the full structured checkpoints remain in the package.
+Because milestones use the existing generic `content.checkpoints` extension
+point, Studio and older v1 readers remain compatible and can ignore checkpoint
+kinds they do not understand.
+
 `create_handoff_session` deliberately creates a continuation descriptor rather
 than restoring a provider's private session. `context` returns a package path
 
 ## Default workflows
 
-For a Copilot CLI session, prefer `create_handoff_package`. The calling agent
-supplies an explicit `analysisRecord` summarizing the current session; the MCP
-cannot access provider-private conversation history or hidden reasoning. The
-tool creates the checkpoint and package, verifies integrity and redaction, then
-exports the file in one operation.
+For a Copilot CLI session, the default export format is `bundle`. Prefer
+`create_handoff_bundle` for normal handoffs. The calling agent supplies an
+explicit `analysisRecord` because the MCP cannot access provider-private
+conversation history or hidden reasoning. The tool creates the checkpoint and
+package, adds only the explicitly reviewed session and evidence files, verifies
+integrity, and writes one `.handoff-bundle.zip`.
 
-On the receiving side, prefer `continue_from_handoff`. It runs verification before
-import, inspects the package and evidence references, accepts the handoff, and
-creates a `copilot-cli` continuation descriptor. Artifact references remain
-references and must be accessed again with the receiving user's credentials.
+Use `create_handoff_package` as the metadata-only JSON fallback when file
+contents must not be copied or ZIP transfer is unavailable.
+
+On the receiving side, use `continue_from_handoff` for both formats. It detects
+ZIP input from its file signature and applies bundle verification and isolated
+extraction automatically; non-ZIP input follows the JSON package workflow. It
+then accepts the handoff and creates a `copilot-cli` continuation descriptor.
+Metadata-only artifact references must still be accessed again with the
+receiving user's credentials.
 The continuation `sessionName` prefers the explicit source `nodeLabel` (the
 session task), then falls back to the checkpoint objective and summary. It is
 normalized to a concise single line and always ends with ` (handoff)`.
@@ -190,11 +249,60 @@ continuing the task. It uses fixed sections for the previous checkpoint and
 lists every original evidence path under `Original evidence required`; a generic
 artifact count or paraphrase is not an adequate display.
 
-Both export tools export the package immediately and return a concise receipt.
+The metadata-only export tools export the package immediately and return a
+concise receipt.
 `originalEvidenceRequired` prominently lists every original evidence location,
 while `engineerActionRequired` tells the engineer to prepare those files
 separately through an approved secure-transfer channel. The MCP does not copy,
 embed, upload, or otherwise transfer artifact file contents.
+
+## Portable handoff bundles
+
+`create_handoff_bundle` is an explicit opt-in workflow for cases where the
+receiving engineer needs the structured handoff, a reviewed high-fidelity
+session export, an optional CLI `/share` file, and original evidence in one
+portable ZIP. It does not replace the safer metadata-only default.
+
+The caller must set both `includeFileContents=true` and
+`sensitivityReviewConfirmed=true`. The selected inputs are explicit individual
+files; directories and symlinks are rejected. Each file is limited to 100 MiB,
+the uncompressed bundle content is limited to 250 MiB, and an archive may
+contain at most 100 entries.
+
+```text
+handoff-<id>.handoff-bundle.zip
+├── manifest.json
+├── handoff.agent-handoff.json
+├── checksums.sha256
+├── session/
+│   ├── <id>-safe-session-events.json
+│   └── <id>-session-share.md
+└── evidence/
+    └── <id>-authentication.har
+```
+
+The embedded handoff uses `bundle://` artifact URIs rather than exposing source
+machine paths. `manifest.json` records every file's role, media type, size, and
+SHA-256 hash. `continue_from_handoff_bundle` validates archive paths, duplicate
+entries, entry and expanded sizes, manifest uniqueness, checksums, the embedded
+handoff schema and integrity, actor authorization, and manifest-to-artifact
+associations before extracting files under:
+
+```text
+%USERPROFILE%\.copilot\session-handoffs\bundles\<bundle-id>
+```
+
+Bundled files remain untrusted evidence after extraction. The receiving
+engineer must inspect and revalidate them and must not execute bundle contents.
+The ZIP provides packaging and integrity checks, not encryption or sender
+authenticity. Transfer it only through an approved case attachment or
+access-controlled secure channel.
+
+Do not add raw `session.db`, unfiltered `events.jsonl`, hidden reasoning, system
+instructions, provider-private state, credentials, cookies, or tokens. Generate
+and review a safe high-fidelity session JSON first, then supply that file using
+`sessionHistoryFile`. A CLI `/share` Markdown or HTML export can be supplied
+separately using `sessionShareFile`.
 
 Defaults are loaded at MCP startup from `HANDOFF_DEFAULTS_FILE`. The included
 `handoff-defaults.json` contains:
@@ -202,6 +310,7 @@ Defaults are loaded at MCP startup from `HANDOFF_DEFAULTS_FILE`. The included
 ```json
 {
   "export": {
+    "format": "bundle",
     "platform": "github-copilot-cli",
     "workflowId": "copilot-cli-session-handoff-test",
     "workflowRevision": 1,

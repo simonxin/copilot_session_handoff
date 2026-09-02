@@ -1,5 +1,6 @@
 {
   "export": {
+    "format": "bundle",
     "platform": "github-copilot-cli",
     "workflowId": "copilot-cli-session-handoff-test",
     "workflowRevision": 1,
