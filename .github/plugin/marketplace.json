@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "Copilot CLI plugins maintained by simonxin.",
-    "version": "0.2.1"
+    "version": "0.2.2"
   },
   "plugins": [
     {
       "name": "copilot-session-handoff",
       "description": "Create verified Copilot session handoff ZIP bundles with checkpoints, session history, and evidence.",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "source": ".",
       "author": {
         "name": "simonxin"

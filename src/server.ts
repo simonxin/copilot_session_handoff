@@ -81,7 +81,7 @@ const createHandoffBundleInputSchema = createHandoffPackageInputSchema.extend({
 
 const server = new McpServer({
   name: 'copilot-session-handoff',
-  version: '0.2.1',
+  version: '0.2.2',
 })
 
 if (toolEnabled('create_handoff')) server.registerTool('create_handoff', {
@@ -105,7 +105,7 @@ if (toolEnabled('create_handoff')) server.registerTool('create_handoff', {
 
 if (toolEnabled('create_handoff_package')) server.registerTool('create_handoff_package', {
   description:
-    'Fallback metadata-only JSON export. Use this only when a ZIP cannot be transferred or the user does not authorize file contents. The default Copilot CLI export is create_handoff_bundle.',
+    'Fallback metadata-only JSON export. Use this only when a ZIP cannot be transferred or the user does not authorize file contents. The default Copilot CLI export is export_session_handoff.',
   inputSchema: createHandoffPackageInputSchema.shape,
 }, async (input) => {
   const { handoff, verification } = await createWorkflowHandoff(input)
@@ -124,9 +124,9 @@ if (toolEnabled('create_handoff_package')) server.registerTool('create_handoff_p
   })
 })
 
-if (toolEnabled('create_handoff_bundle')) server.registerTool('create_handoff_bundle', {
+if (toolEnabled('export_session_handoff')) server.registerTool('export_session_handoff', {
   description:
-    'The single default Copilot CLI export. Always create a portable ZIP. If sessionHistoryFile is omitted, generate a safe high-fidelity JSON from the Copilot session identified by runId. Automatically include every local artifacts[].path file as bundled evidence. Explicitly supplied evidenceFiles and an optional CLI share file are also included. File contents are copied only when includeFileContents and sensitivityReviewConfirmed are true. The ZIP is not encrypted and must be transferred through an approved secure channel.',
+    'Export the current Copilot session handoff. This is the single default CLI export and always creates a portable .handoff-bundle.zip, never a standalone JSON file. If sessionHistoryFile is omitted, generate a safe high-fidelity JSON from the Copilot session identified by runId. Automatically include every local artifacts[].path file as bundled evidence. Explicitly supplied evidenceFiles and an optional CLI share file are also included. File contents are copied only when includeFileContents and sensitivityReviewConfirmed are true. The ZIP is not encrypted and must be transferred through an approved secure channel.',
   inputSchema: createHandoffBundleInputSchema.shape,
 }, async (input) => {
   const runId = resolveWorkflowRunId(input)
@@ -812,7 +812,7 @@ function toolEnabled(toolName: string): boolean {
   if (toolProfile === 'full') return true
   if (toolProfile === 'cli') {
     return [
-      'create_handoff_bundle',
+      'export_session_handoff',
       'continue_from_handoff',
     ].includes(toolName)
   }

@@ -132,7 +132,7 @@ the server profile performs the filtering before tool discovery.
 |---|---|
 | `create_handoff` | Create, redact, hash, and persist a v1 package |
 | `create_handoff_package` | Default create, checkpoint, verify, and export workflow |
-| `create_handoff_bundle` | Create a ZIP with the handoff plus reviewed session and evidence files |
+| `export_session_handoff` | Export a ZIP with the handoff plus reviewed session and evidence files |
 | `verify_handoff` | Validate a package without storing it |
 | `verify_handoff_file` | Validate a local JSON package |
 | `import_handoff` | Verify and import a package object |
@@ -211,14 +211,14 @@ than restoring a provider's private session. `context` returns a package path
 
 ## Default workflows
 
-For a Copilot CLI session, the default export format is `bundle`. Prefer
-`create_handoff_bundle` for normal handoffs. The calling agent supplies an
+For a Copilot CLI session, the default export format is `bundle`. Use
+`export_session_handoff` for normal handoffs. The calling agent supplies an
 explicit `analysisRecord` because the MCP cannot access provider-private
 conversation history or hidden reasoning. The tool creates the checkpoint and
 package, adds only the explicitly reviewed session and evidence files, verifies
 integrity, and writes one `.handoff-bundle.zip`.
 
-The normal CLI plugin profile exposes only `create_handoff_bundle` and
+The normal CLI plugin profile exposes only `export_session_handoff` and
 `continue_from_handoff`, so the agent cannot accidentally select the old JSON
 export. `create_handoff_package` remains available in the `full` administrative
 profile as a metadata-only fallback.
@@ -260,10 +260,11 @@ embed, upload, or otherwise transfer artifact file contents.
 
 ## Portable handoff bundles
 
-`create_handoff_bundle` is an explicit opt-in workflow for cases where the
+`export_session_handoff` is the default workflow for cases where the
 receiving engineer needs the structured handoff, a reviewed high-fidelity
 session export, an optional CLI `/share` file, and original evidence in one
-portable ZIP. It does not replace the safer metadata-only default.
+portable ZIP. The metadata-only JSON workflow remains available as a fallback
+when file contents cannot be included.
 
 The caller must set both `includeFileContents=true` and
 `sensitivityReviewConfirmed=true`. When `sessionHistoryFile` is omitted, the

@@ -74,7 +74,7 @@ def test_tool_profiles_expose_only_host_specific_tools(tmp_path: Path) -> None:
     )
     try:
         assert cli.list_tools() == {
-            "create_handoff_bundle",
+            "export_session_handoff",
             "continue_from_handoff",
         }
         assert studio.list_tools() == {
@@ -103,7 +103,7 @@ def test_plugin_manifest_launches_bundled_mcp(tmp_path: Path) -> None:
     )
     try:
         assert plugin.list_tools() == {
-            "create_handoff_bundle",
+            "export_session_handoff",
             "continue_from_handoff",
         }
     finally:
@@ -495,7 +495,7 @@ def test_creates_and_continues_portable_handoff_bundle(
     )
     try:
         bundled = producer.call_tool(
-            "create_handoff_bundle",
+            "export_session_handoff",
             {
                 "analysisRecord": {
                     "summary": "Investigated the authentication callback.",
@@ -710,7 +710,7 @@ def test_default_bundle_auto_exports_safe_session_and_artifact_files(
     )
     try:
         bundled = producer.call_tool(
-            "create_handoff_bundle",
+            "export_session_handoff",
             {
                 "runId": session_id,
                 "analysisRecord": {
@@ -797,7 +797,7 @@ def test_rejects_tampered_handoff_bundle(tmp_path: Path) -> None:
     )
     try:
         bundled = producer.call_tool(
-            "create_handoff_bundle",
+            "export_session_handoff",
             {
                 "analysisRecord": {"summary": "Bundle tamper test."},
                 "sessionHistoryFile": {
