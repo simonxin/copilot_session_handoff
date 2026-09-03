@@ -83,12 +83,11 @@ copilot plugin list
 copilot mcp list
 ```
 
-When updating a direct or local installation, reinstall the plugin so Copilot
-CLI refreshes its cached copy:
+Update the marketplace metadata first, then update the installed plugin:
 
 ```powershell
 copilot plugin marketplace update simonxin-plugins
-copilot plugin install copilot-session-handoff@simonxin-plugins
+copilot plugin update copilot-session-handoff
 ```
 
 ## Copilot CLI MCP configuration
