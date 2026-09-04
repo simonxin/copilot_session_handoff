@@ -222,6 +222,51 @@ The normal CLI plugin profile exposes only `export_session_handoff` and
 export. `create_handoff_package` remains available in the `full` administrative
 profile as a metadata-only fallback.
 
+### Prompt samples
+
+Export the current session as a ZIP bundle:
+
+```text
+Export the current Copilot session as a handoff ZIP bundle to C:\case\handoffs.
+Include the safe session history, but do not include original evidence files.
+```
+
+Export the session with reviewed evidence files:
+
+```text
+Export the current session as a handoff ZIP bundle to C:\case\handoffs.
+Include the safe session history and these original evidence files:
+- C:\case\authentication.har
+- C:\case\diagnostic.log
+
+I have reviewed these files for credentials, tokens, cookies, personal data,
+and other sensitive content, and I approve including them in the bundle.
+Report the exact ZIP path and the evidence file names that were included.
+```
+
+For a long investigation, ask Copilot to preserve milestone checkpoints and
+finding-to-evidence relationships:
+
+```text
+Create a handoff ZIP for this investigation. Summarize the major milestones,
+confirmed findings, decisions, open questions, and next steps. Associate every
+confirmed finding with the relevant evidence file or query result, and include
+the reviewed original evidence files in the bundle.
+```
+
+Continue from a received bundle:
+
+```text
+Continue from C:\case\handoff-<id>.handoff-bundle.zip. Verify the bundle,
+checksums, package integrity, and evidence manifest before using its contents.
+Show the previous checkpoint, milestone timeline, original evidence, open
+questions, and next steps before continuing the work.
+```
+
+Only request original file inclusion after reviewing the files. A handoff ZIP
+provides integrity checks but is not encrypted; transfer it through an approved
+secure channel.
+
 On the receiving side, use `continue_from_handoff` for both formats. It detects
 ZIP input from its file signature and applies bundle verification and isolated
 extraction automatically; non-ZIP input follows the JSON package workflow. It
